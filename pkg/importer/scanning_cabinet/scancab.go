@@ -17,11 +17,14 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"time"
+        "bufio"
+        "fmt"
+        "io/ioutil"
+        "log"
+        "net/http"
+        "os"
+        "strings"
+        "time"
 
 	"github.com/golang/oauth2"
 	"github.com/golang/oauth2/google"
@@ -51,6 +54,8 @@ var (
 	myEmail = "mathieu.lonjaret@gmail.com"
 	ds *gcdatastore.Dataset
 	cl *http.Client
+        clientId = "886924983567-hnd1dertfvi2g0lpjs72aae8hi35k364.apps.googleusercontent.com"
+        clientSecret = "XYta4alhMIjTHK5mreBk-fXU"
 )
 
 // UserInfo represents the metadata associated with the Google User
@@ -206,7 +211,37 @@ func getScannedFile(key string) error {
 	return ioutil.WriteFile("/home/mpl/glenda.png", body, 0700)
 }
 
-func main() {
+func transportFromAPIKey() (*oauth2.Transport, error) {
+	conf, err := oauth2.NewConfig(&oauth2.Options{
+		Scopes: []string{"https://www.googleapis.com/auth/appengine.admin",
+                                        "https://www.googleapis.com/auth/userinfo.email"},
+                ClientID:     clientId,
+                ClientSecret: clientSecret,
+                RedirectURL:  "urn:ietf:wg:oauth:2.0:oob",
+                },
+                "https://accounts.google.com/o/oauth2/auth",
+                "https://accounts.google.com/o/oauth2/token")
+        if err != nil {
+                return nil, err
+        }
+
+        // Redirect user to consent page to ask for permission
+        // for the scopes specified above.
+        url := conf.AuthCodeURL("state", "online", "auto")
+//      url := conf.AuthCodeURL("state", "offline", "auto")
+        fmt.Printf("Visit the URL for the auth dialog: %v\n", url)
+
+        input := bufio.NewReader(os.Stdin)
+        line, _, err := input.ReadLine()
+        if err != nil {
+                log.Fatalf("Failed to read line: %v", err)
+        }
+        authorizationCode := strings.TrimSpace(string(line))
+
+        return conf.NewTransportWithCode(authorizationCode)
+}
+
+func transportFromServiceAccount() (*oauth2.Transport, error) {
 	pemKeyBytes, err := ioutil.ReadFile("/home/mpl/scancabcamli-496f5f6eb01b.pem")
 	if err != nil {
 		log.Fatal(err)
@@ -223,14 +258,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	return conf.NewTransport(), nil
+}
 
-	cl = &http.Client{Transport: conf.NewTransport()}
+func main() {
+	tr, err := transportFromAPIKey()
+	if err != nil {
+		log.Fatal(err)
+	}
+	cl = &http.Client{Transport: tr}
 	scanBlobKey := "5066549580791808"
 	if err := getScannedFile(scanBlobKey); err != nil {
 		log.Fatal(err)
 	}
 	return
 
+	pemKeyBytes, err := ioutil.ReadFile("/home/mpl/scancabcamli-496f5f6eb01b.pem")
+	if err != nil {
+		log.Fatal(err)
+	}
 	ds, err = gcdatastore.NewDataset(projectId, serviceAccount, pemKeyBytes)
 	if err != nil {
 		log.Fatal(err)
