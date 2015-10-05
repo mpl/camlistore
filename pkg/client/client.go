@@ -62,13 +62,14 @@ type Client struct {
 	prefixv       string        // URL prefix before "/camli/"
 	isSharePrefix bool          // URL is a request for a share blob
 
-	discoOnce      syncutil.Once
-	searchRoot     string      // Handler prefix, or "" if none
-	downloadHelper string      // or "" if none
-	storageGen     string      // storage generation, or "" if not reported
-	syncHandlers   []*SyncInfo // "from" and "to" url prefix for each syncHandler
-	serverKeyID    string      // Server's GPG public key ID.
-	helpRoot       string      // Handler prefix, or "" if none
+	discoOnce              syncutil.Once
+	searchRoot             string      // Handler prefix, or "" if none
+	downloadHelper         string      // or "" if none
+	storageGen             string      // storage generation, or "" if not reported
+	syncHandlers           []*SyncInfo // "from" and "to" url prefix for each syncHandler
+	serverKeyID            string      // Server's GPG public key ID.
+	helpRoot               string      // Handler prefix, or "" if none
+	serverPublicKeyBlobRef blob.Ref    // Server's public key blobRef
 
 	signerOnce sync.Once
 	signer     *schema.Signer
@@ -384,6 +385,19 @@ func (c *Client) ServerKeyID() (string, error) {
 		return "", ErrNoSigning
 	}
 	return c.serverKeyID, nil
+}
+
+// ServerPublicKeyBlobRef returns the server's public key blobRef
+// If the server isn't running a sign handler, the error will be ErrNoSigning.
+func (c *Client) ServerPublicKeyBlobRef() (blob.Ref, error) {
+	if err := c.condDiscovery(); err != nil {
+		return blob.Ref{}, err
+	}
+
+	if !c.serverPublicKeyBlobRef.Valid() {
+		return blob.Ref{}, ErrNoSigning
+	}
+	return c.serverPublicKeyBlobRef, nil
 }
 
 // SearchRoot returns the server's search handler.
@@ -791,6 +805,7 @@ func (c *Client) doDiscovery() error {
 
 	if disco.Signing != nil {
 		c.serverKeyID = disco.Signing.PublicKeyID
+		c.serverPublicKeyBlobRef = disco.Signing.PublicKeyBlobRef
 	}
 	return nil
 }
@@ -813,17 +828,17 @@ func (c *Client) GetJSON(url string, data interface{}) error {
 // Post is like http://golang.org/pkg/net/http/#Client.Post
 // but with implementation details like gated requests. The
 // URL's host must match the client's configured server.
-func (c *Client) Post(url string, bodyType string, body io.Reader) error {
+func (c *Client) Post(url string, bodyType string, body io.Reader) (*http.Response, error) {
 	if !strings.HasPrefix(url, c.discoRoot()) {
-		return fmt.Errorf("wrong URL (%q) for this server", url)
+		return nil, fmt.Errorf("wrong URL (%q) for this server", url)
 	}
 	req := c.newRequest("POST", url, body)
 	req.Header.Set("Content-Type", bodyType)
 	res, err := c.expect2XX(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return res.Body.Close()
+	return res, nil
 }
 
 // newRequests creates a request with the authentication header, and with the

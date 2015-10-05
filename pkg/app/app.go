@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -30,13 +31,7 @@ import (
 	"camlistore.org/pkg/netutil"
 )
 
-// Client returns a client from pkg/client, configured by environment variables
-// for applications, and ready to be used to connect to the Camlistore server.
-func Client() (*client.Client, error) {
-	server := os.Getenv("CAMLI_API_HOST")
-	if server == "" {
-		return nil, errors.New("CAMLI_API_HOST var not set")
-	}
+func BasicAuth() (auth.AuthMode, error) {
 	authString := os.Getenv("CAMLI_AUTH")
 	if authString == "" {
 		return nil, errors.New("CAMLI_AUTH var not set")
@@ -45,7 +40,21 @@ func Client() (*client.Client, error) {
 	if len(userpass) != 2 {
 		return nil, fmt.Errorf("invalid auth string syntax. got %q, want \"username:password\"", authString)
 	}
-	cl := client.NewFromParams(server, auth.NewBasicAuth(userpass[0], userpass[1]))
+	return auth.NewBasicAuth(userpass[0], userpass[1]), nil
+}
+
+// Client returns a client from pkg/client, configured by environment variables
+// for applications, and ready to be used to connect to the Camlistore server.
+func Client() (*client.Client, error) {
+	server := os.Getenv("CAMLI_API_HOST")
+	if server == "" {
+		return nil, errors.New("CAMLI_API_HOST var not set")
+	}
+	am, err := BasicAuth()
+	if err != nil {
+		return nil, err
+	}
+	cl := client.NewFromParams(server, am)
 	cl.SetHTTPClient(&http.Client{
 		Transport: cl.TransportForConfig(nil),
 	})
@@ -59,5 +68,30 @@ func ListenAddress() (string, error) {
 	if baseURL == "" {
 		return "", errors.New("CAMLI_APP_BACKEND_URL is undefined")
 	}
+	// TODO(mpl): go back to netutil.HostPort and see if we can't replace it with just url.Parse now that we want to be stricter with these things.
 	return netutil.HostPort(baseURL)
+}
+
+func BaseURL() (string, error) {
+	appHandlerPrefix := os.Getenv("CAMLI_APP_HANDLER_PREFIX")
+	if appHandlerPrefix == "" {
+		return "", errors.New("CAMLI_APP_HANDLER_PREFIX is undefined")
+	}
+	apiHost := os.Getenv("CAMLI_API_HOST")
+	if apiHost == "" {
+		return "", errors.New("CAMLI_API_HOST is undefined")
+	}
+	return apiHost + strings.TrimPrefix(appHandlerPrefix, "/"), nil
+}
+
+func Scheme() (string, error) {
+	backendURL := os.Getenv("CAMLI_APP_BACKEND_URL")
+	if backendURL == "" {
+		return "", errors.New("CAMLI_APP_BACKEND_URL is undefined")
+	}
+	parsedURL, err := url.Parse(backendURL)
+	if err != nil {
+		return "", fmt.Errorf("Invalid CAMLI_APP_BACKEND_URL value: %v", err)
+	}
+	return parsedURL.Scheme, nil
 }

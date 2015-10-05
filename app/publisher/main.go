@@ -241,7 +241,7 @@ func goTemplate(files *fileembed.Files, templateFile string) (*template.Template
 type client interface {
 	search.QueryDescriber
 	GetJSON(url string, data interface{}) error
-	Post(url string, bodyType string, body io.Reader) error
+	Post(url string, bodyType string, body io.Reader) (*http.Response, error)
 	blob.Fetcher
 }
 

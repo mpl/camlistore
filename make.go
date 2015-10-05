@@ -140,6 +140,7 @@ func main() {
 		"camlistore.org/server/camlistored",
 		"camlistore.org/app/hello",
 		"camlistore.org/app/publisher",
+		"camlistore.org/app/scanningcabinet",
 	}
 	switch *targets {
 	case "*":

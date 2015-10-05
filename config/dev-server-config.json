@@ -1,7 +1,7 @@
 { "_for-emacs": "-*- mode: js2;-*-",
 	"handlerConfig": true,
 	"baseURL": ["_env", "${CAMLI_BASEURL}"],
-	"auth": ["_env", "${CAMLI_AUTH}"],
+	"auth": "userpass:camlistore:pass3179",
 	"https": ["_env", "${CAMLI_TLS}", false],
 	"httpsCert": "config/tls.crt",
 	"httpsKey": "config/tls.key",
@@ -26,6 +26,17 @@
 				"program": "hello",
 				"appConfig": {
 					"word": "world"
+				}
+			}
+		},
+
+		"/scancab/": {
+			"handler": "app",
+			"enabled": true,
+			"handlerArgs": {
+				"program": "scanningcabinet",
+				"appConfig": {
+					"auth": "userpass:foo:bar"
 				}
 			}
 		},

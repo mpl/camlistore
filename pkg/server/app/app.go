@@ -46,6 +46,7 @@ type Handler struct {
 	auth      auth.AuthMode  // Used for basic HTTP authenticating against the app requests.
 	appConfig jsonconfig.Obj // Additional parameters the app can request, or nil.
 
+	prefix     string                 // Prefix to strip from requests before proxying them to the app.
 	proxy      *httputil.ReverseProxy // For redirecting requests to the app.
 	backendURL string                 // URL that we proxy to (i.e. base URL of the app).
 
@@ -65,6 +66,7 @@ func (a *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "no proxy for the app", 500)
 		return
 	}
+	req.URL.Path = strings.TrimPrefix(req.URL.Path, a.prefix)
 	a.proxy.ServeHTTP(rw, req)
 }
 
@@ -144,33 +146,44 @@ func NewHandler(conf jsonconfig.Obj, apiHost, appHandlerPrefix string) (*Handler
 		// If not specified in the conf, we're dynamically picking the port of the CAMLI_APP_BACKEND_URL
 		// now (instead of letting the app itself do it), because we need to know it in advance in order
 		// to set the app handler's proxy.
+		// TODO(mpl): when would we ever want to have the apphandler prefix part of the backend URL?
+		// the app itself does not care what prefix Camlistore uses to identify that a request should be
+		// forwarded to it, does it?
 		backendURL, err = randPortBackendURL(apiHost, appHandlerPrefix)
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	proxyURL, err := url.Parse(backendURL)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse backendURL %q: %v", backendURL, err)
+	}
+	proxyURL.Path = strings.TrimPrefix(proxyURL.Path, appHandlerPrefix)
+	backendURL = proxyURL.String()
+
 	username, password := auth.RandToken(20), auth.RandToken(20)
 	camliAuth := username + ":" + password
 	basicAuth := auth.NewBasicAuth(username, password)
+	// TODO(mpl): make sure this new design - backendURL is just a host:port by
+	// default, and we strip the prefix just before proxying - works well with the
+	// publisher handler too.
 	envVars := map[string]string{
-		"CAMLI_API_HOST":        apiHost,
-		"CAMLI_AUTH":            camliAuth,
-		"CAMLI_APP_BACKEND_URL": backendURL,
+		"CAMLI_API_HOST":           apiHost,
+		"CAMLI_AUTH":               camliAuth,
+		"CAMLI_APP_BACKEND_URL":    backendURL,
+		"CAMLI_APP_HANDLER_PREFIX": appHandlerPrefix,
 	}
 	if appConfig != nil {
 		envVars["CAMLI_APP_CONFIG_URL"] = apiHost + strings.TrimPrefix(appHandlerPrefix, "/") + "config.json"
 	}
 
-	proxyURL, err := url.Parse(backendURL)
-	if err != nil {
-		return nil, fmt.Errorf("could not parse backendURL %q: %v", backendURL, err)
-	}
 	return &Handler{
 		name:       name,
 		envVars:    envVars,
 		auth:       basicAuth,
 		appConfig:  appConfig,
+		prefix:     appHandlerPrefix,
 		proxy:      httputil.NewSingleHostReverseProxy(proxyURL),
 		backendURL: backendURL,
 	}, nil

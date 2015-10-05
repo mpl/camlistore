@@ -53,6 +53,10 @@ const (
 	// 3339 format.
 	DatePublished = "datePublished"
 
+	// PaymentDueDate is http://schema.org/paymentDueDate in RFC
+	// 3339 format.
+	PaymentDueDate = "paymentDueDate"
+
 	// Title is http://schema.org/title
 	Title = "title"
 
