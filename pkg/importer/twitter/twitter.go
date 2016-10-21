@@ -56,6 +56,7 @@ const (
 	tokenRequestURL               = "https://api.twitter.com/oauth/access_token"
 	userInfoAPIPath               = "account/verify_credentials.json"
 	userTimeLineAPIPath           = "statuses/user_timeline.json"
+	showTweetAPIPath              = "statuses/show.json"
 
 	// runCompleteVersion is a cache-busting version number of the
 	// importer code. It should be incremented whenever the
@@ -157,13 +158,15 @@ type run struct {
 	oauthClient *oauth.Client      // No need to guard, used read-only.
 	accessCreds *oauth.Credentials // No need to guard, used read-only.
 
+	tweetsNode, failedNode *importer.Object // Not guarded because set once at the beginning of run.
+
 	mu     sync.Mutex // guards anyErr
 	anyErr bool
 }
 
 var forceFullImport, _ = strconv.ParseBool(os.Getenv("CAMLI_TWITTER_FULL_IMPORT"))
 
-func (im *imp) Run(ctx *importer.RunContext) error {
+func (im *imp) Run(ctx *importer.RunContext) (finalErr error) {
 	clientId, secret, err := ctx.Credentials()
 	if err != nil {
 		return fmt.Errorf("no API credentials: %v", err)
@@ -199,6 +202,36 @@ func (im *imp) Run(ctx *importer.RunContext) error {
 		return errors.New("UserID hasn't been set by account setup.")
 	}
 
+	// Calling them once and for all first, because it's not safe to call them concurrently.
+	tweetsNode, err := r.getTopLevelNode("tweets")
+	if err != nil {
+		return err
+	}
+	failedNode, err := r.getTopLevelNode("failed")
+	if err != nil {
+		return err
+	}
+	r.tweetsNode = tweetsNode
+	r.failedNode = failedNode
+
+	retryC := make(chan error, 1)
+	go func() {
+		retryC <- r.retryFailedTweets(time.Minute)
+	}()
+	defer func() {
+		err := <-retryC
+		if err == nil {
+			return
+		}
+		errMsg := fmt.Sprintf("error retrying previously failed tweets: %v", err)
+		if finalErr != nil {
+			// let's not overwrite the "main run" error message
+			log.Print(errMsg)
+			return
+		}
+		finalErr = errors.New(errMsg)
+	}()
+
 	skipAPITweets, _ := strconv.ParseBool(os.Getenv("CAMLI_TWITTER_SKIP_API_IMPORT"))
 	if !skipAPITweets {
 		if err := r.importTweets(userID); err != nil {
@@ -206,9 +239,12 @@ func (im *imp) Run(ctx *importer.RunContext) error {
 		}
 	}
 
-	zipRef := acctNode.Attr(acctAttrTweetZip)
-	zipDoneVal := zipRef + ":" + runCompleteVersion
-	if zipRef != "" && !(r.incremental && acctNode.Attr(acctAttrZipDoneVersion) == zipDoneVal) {
+	zipImport := func() error {
+		zipRef := acctNode.Attr(acctAttrTweetZip)
+		zipDoneVal := zipRef + ":" + runCompleteVersion
+		if zipRef == "" || (r.incremental && acctNode.Attr(acctAttrZipDoneVersion) == zipDoneVal) {
+			return nil
+		}
 		zipbr, ok := blob.Parse(zipRef)
 		if !ok {
 			return fmt.Errorf("invalid zip file blobref %q", zipRef)
@@ -225,9 +261,11 @@ func (im *imp) Run(ctx *importer.RunContext) error {
 		if err := r.importTweetsFromZip(userID, zr); err != nil {
 			return err
 		}
-		if err := acctNode.SetAttrs(acctAttrZipDoneVersion, zipDoneVal); err != nil {
-			return err
-		}
+		return acctNode.SetAttrs(acctAttrZipDoneVersion, zipDoneVal)
+	}
+
+	if err := zipImport(); err != nil {
+		return err
 	}
 
 	r.mu.Lock()
@@ -315,17 +353,119 @@ func (r *run) doAPI(result interface{}, apiPath string, keyval ...string) error 
 		r.accessCreds}.PopulateJSONFromURL(result, apiURL+apiPath, keyval...)
 }
 
-func (r *run) importTweets(userID string) error {
-	maxId := ""
-	continueRequests := true
+// noteFailedTweet moves the given tweet out of the "tweets" collection, and
+// into the "failed" collection, hence marking it to be asynchronously retried in a
+// subsequent importer run.
+func (r *run) noteFailedTweet(tweetID string) error {
+	log.Printf("Marking tweet %v as incomplete", tweetID)
+	tweetNode, err := r.tweetsNode.ChildPathObjectOrFunc(tweetID, func() (*importer.Object, error) {
+		return nil, fmt.Errorf("object for tweet %v should already exist, not creating a new one", tweetID)
+	})
+	if err != nil {
+		return err
+	}
+	// Add the incomplete tweet node to the "failed" collection
+	attrName := "camliPath:" + tweetID
+	if err := r.failedNode.SetAttr(attrName, tweetNode.PermanodeRef().String()); err != nil {
+		return err
+	}
+	// Remove the incomplete tweet node from the "tweets" collection
+	return r.tweetsNode.DelAttr(attrName, "")
+}
 
-	tweetsNode, err := r.getTopLevelNode("tweets")
+// failedTweets fetches all tweet nodes from the "failed" collection.
+func (r *run) failedTweets() (map[string]blob.Ref, error) {
+	failedNodes := make(map[string]blob.Ref) // keyed by tweet ID
+	r.failedNode.ForeachAttr(func(key, value string) {
+		if strings.HasPrefix(key, "camliPath:") {
+			br, ok := blob.Parse(value)
+			if !ok {
+				r.errorf("could not parse %q as a blobRef (camliPath of %v)", value, r.failedNode.PermanodeRef().String())
+				return
+			}
+			failedNodes[strings.TrimPrefix(key, "camliPath:")] = br
+		}
+	})
+	return failedNodes, nil
+}
+
+// retryFailedTweets tries importing all the tweets that had previously failed
+// due to their media not being found, and which are now in the "failed"
+// collection. We keep on retrying each tweet for as long as it fails for that
+// same reason, but for no longer than maxWait. And otherwise (if it succeeds,
+// or fails for another reason) we stop immediately.
+func (r *run) retryFailedTweets(maxWait time.Duration) error {
+	failedNodes, err := r.failedTweets()
 	if err != nil {
 		return err
 	}
 
+	gate := syncutil.NewGate(tweetsAtOnce)
+	var grp syncutil.Group
+	for tweetID, tweetBlobref := range failedNodes {
+		select {
+		case <-r.Context().Done():
+			r.errorf("Twitter importer: interrupted")
+			return r.Context().Err()
+		default:
+		}
+		tweetID := tweetID
+		tweetBlobref := tweetBlobref
+		gate.Start()
+		grp.Go(func() error {
+			defer gate.Done()
+			log.Printf("Retrying to import tweet %v for %v", tweetID, maxWait)
+			done := time.Now().Add(maxWait)
+			pause := 10 * time.Second
+			// TODO(mpl): we could decode the info from the failed
+			// node, see what's missing, and only redo what's needed
+			// instead of calling the whole of importTweet again. But
+			// it's simpler and safer that way for now, albeit less
+			// efficient.
+			var tweet apiTweetItem
+			if err = r.doAPI(&tweet, showTweetAPIPath, []string{"id", tweetID}...); err != nil {
+				return err
+			}
+			for time.Now().Before(done) {
+				_, err := r.importTweetAs(&tweet, true, tweetBlobref)
+				if err == nil {
+					// Add the now complete tweet to the "tweets" collection
+					attrName := "camliPath:" + tweetID
+					if err := r.tweetsNode.SetAttr(attrName, tweetBlobref.String()); err != nil {
+						return err
+					}
+					// And remove it from the "failed" collection
+					if err := r.failedNode.DelAttr(attrName, ""); err != nil {
+						return err
+					}
+					break
+				}
+				if err != errIncomplete {
+					return err
+				}
+				time.Sleep(pause)
+				pause *= 2
+			}
+			return nil
+		})
+	}
+	err = grp.Err()
+	if err != nil {
+		r.errorf("Some incomplete tweets failed again to be imported. They'll be retried again next run.")
+	}
+	return err
+}
+
+func (r *run) importTweets(userID string) error {
+	maxId := ""
+	continueRequests := true
+
 	numTweets := 0
 	sawTweet := map[string]bool{}
+	failedNodes, err := r.failedTweets()
+	if err != nil {
+		return err
+	}
 
 	// If attrs is changed, so should the expected responses accordingly for the
 	// RoundTripper of MakeTestData (testdata.go).
@@ -369,6 +509,11 @@ func (r *run) importTweets(userID string) error {
 			if sawTweet[tweet.Id] {
 				continue
 			}
+			// And disregard tweets we've already noted as incomplete.
+			// Let the async routine deal with them.
+			if _, ok := failedNodes[tweet.Id]; ok {
+				continue
+			}
 			sawTweet[tweet.Id] = true
 			newThisBatch++
 			maxId = tweet.Id
@@ -376,11 +521,19 @@ func (r *run) importTweets(userID string) error {
 			gate.Start()
 			grp.Go(func() error {
 				defer gate.Done()
-				dup, err := r.importTweet(tweetsNode, tweet, true)
+				dup, err := r.importTweet(tweet, true)
 				if !dup {
 					allDupMu.Lock()
 					allDups = false
 					allDupMu.Unlock()
+				}
+				if err == errIncomplete {
+					if err := r.noteFailedTweet(tweet.ID()); err != nil {
+						r.errorf("Twitter importer: error noting incomplete tweet %s %v", tweet.ID(), err)
+						return err
+					}
+					// Consider the tweet temporarily ok as it's queued to be retried later
+					return nil
 				}
 				if err != nil {
 					r.errorf("Twitter importer: error importing tweet %s %v", tweet.Id, err)
@@ -427,11 +580,10 @@ func tweetsFromZipFile(zf *zip.File) (tweets []*zipTweetItem, err error) {
 func (r *run) importTweetsFromZip(userID string, zr *zip.Reader) error {
 	log.Printf("Processing zip file with %d files", len(zr.File))
 
-	tweetsNode, err := r.getTopLevelNode("tweets")
+	failedNodes, err := r.failedTweets()
 	if err != nil {
 		return err
 	}
-
 	var (
 		gate = syncutil.NewGate(tweetsAtOnce)
 		grp  syncutil.Group
@@ -447,12 +599,25 @@ func (r *run) importTweetsFromZip(userID string, zr *zip.Reader) error {
 		}
 
 		for i := range tweets {
+			// Disregard tweets we've already noted as incomplete.
+			// Let the async routine deal with them.
+			if _, ok := failedNodes[tweets[i].ID()]; ok {
+				continue
+			}
 			total++
 			tweet := tweets[i]
 			gate.Start()
 			grp.Go(func() error {
 				defer gate.Done()
-				_, err := r.importTweet(tweetsNode, tweet, false)
+				_, err := r.importTweet(tweet, false)
+				if err == errIncomplete {
+					if err := r.noteFailedTweet(tweet.ID()); err != nil {
+						r.errorf("Twitter importer: error noting incomplete tweet %s %v", tweet.ID(), err)
+						return err
+					}
+					// Consider the tweet temporarily ok as it's queued to be retried later
+					return nil
+				}
 				return err
 			})
 		}
@@ -475,16 +640,30 @@ func timeParseFirstFormat(timeStr string, format ...string) (t time.Time, err er
 	return
 }
 
+var errIncomplete = errors.New("tweet was not fully fetched")
+
 // viaAPI is true if it came via the REST API, or false if it came via a zip file.
-func (r *run) importTweet(parent *importer.Object, tweet tweetItem, viaAPI bool) (dup bool, err error) {
+func (r *run) importTweet(tweet tweetItem, viaAPI bool) (dup bool, err error) {
+	return r.importTweetAs(tweet, viaAPI, blob.Ref{})
+}
+
+// viaAPI is true if it came via the REST API, or false if it came via a zip file.
+// If as is a valid blobRef, it is used as the permanode we import onto.
+func (r *run) importTweetAs(tweet tweetItem, viaAPI bool, as blob.Ref) (dup bool, err error) {
 	select {
 	case <-r.Context().Done():
 		r.errorf("Twitter importer: interrupted")
 		return false, r.Context().Err()
 	default:
 	}
+	parent := r.tweetsNode
 	id := tweet.ID()
-	tweetNode, err := parent.ChildPathObject(id)
+	var tweetNode *importer.Object
+	if as.Valid() {
+		tweetNode, err = r.Host.ObjectFromRef(as)
+	} else {
+		tweetNode, err = parent.ChildPathObject(id)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -528,6 +707,7 @@ func (r *run) importTweet(parent *importer.Object, tweet tweetItem, viaAPI bool)
 		attrs = append(attrs, attrImportMethod, "zip")
 	}
 
+	incomplete := false
 	for i, m := range tweet.Media() {
 		filename := m.BaseFilename()
 		if tweetNode.Attr("camliPath:"+filename) != "" && (i > 0 || tweetNode.Attr("camliContentImage") != "") {
@@ -564,19 +744,28 @@ func (r *run) importTweet(parent *importer.Object, tweet tweetItem, viaAPI bool)
 			break
 		}
 		if !gotMedia && tried > 0 {
-			return false, fmt.Errorf("All media URLs 404s for tweet %s", url)
+			r.errorf("All media URLs 404s for tweet %s", url)
+			incomplete = true
+			continue
 		}
 	}
 
 	changes, err := tweetNode.SetAttrs2(attrs...)
-	if err == nil && changes {
+	if err != nil {
+		return !changes, err
+	}
+	if incomplete {
+		return !changes, errIncomplete
+	}
+	if changes {
 		log.Printf("Imported tweet %s", url)
 	}
-	return !changes, err
+	return !changes, nil
 }
 
-// The path be one of "tweets".
+// The path be one of "tweets", or "failed".
 // In the future: "lists", "direct_messages", etc.
+// getTopLevelNode is not concurrent safe.
 func (r *run) getTopLevelNode(path string) (*importer.Object, error) {
 	acctNode := r.AccountNode()
 
@@ -595,6 +784,8 @@ func (r *run) getTopLevelNode(path string) (*importer.Object, error) {
 	switch path {
 	case "tweets":
 		title = fmt.Sprintf("%s's Tweets", acctNode.Attr(importer.AcctAttrUserName))
+	case "failed":
+		title = fmt.Sprintf("%s's Incomplete Tweets", acctNode.Attr(importer.AcctAttrUserName))
 	}
 	return obj, obj.SetAttr(nodeattr.Title, title)
 }

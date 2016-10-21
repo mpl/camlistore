@@ -1252,17 +1252,44 @@ func (o *Object) ForeachAttr(fn func(key, value string)) {
 	}
 }
 
+// DelAttr removes value from the values set for the attribute attr of
+// permaNode. If value is empty then all the values for attribute are cleared.
+func (o *Object) DelAttr(key, value string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	_, err := o.h.upload(schema.NewDelAttributeClaim(o.pn, key, value))
+	if err != nil {
+		return err
+	}
+	if o.attr == nil {
+		o.attr = make(map[string][]string)
+		return nil
+	}
+	if value == "" {
+		delete(o.attr, key)
+		return nil
+	}
+	var values []string
+	for _, v := range o.attr[key] {
+		if v != value {
+			values = append(values, v)
+		}
+	}
+	o.attr[key] = values
+	return nil
+}
+
 // SetAttr sets the attribute key to value.
 func (o *Object) SetAttr(key, value string) error {
 	if o.Attr(key) == value {
 		return nil
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	_, err := o.h.upload(schema.NewSetAttributeClaim(o.pn, key, value))
 	if err != nil {
 		return err
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
 	if o.attr == nil {
 		o.attr = make(map[string][]string)
 	}
