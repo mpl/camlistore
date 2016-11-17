@@ -132,7 +132,14 @@ type Client struct {
 	viaMu sync.RWMutex
 	via   map[blob.Ref]blob.Ref // target => via (target is referenced from via)
 
-	log             *log.Logger // not nil
+	// Verbose controls how much logging from the client is printed. It is
+	// the caller's responsibility to guard it.
+	Verbose bool
+	// Logger is the logger used by the client. It defaults to a standard
+	// logger to os.Stderr if the client is initialized by one of the package's
+	// functions. It is the caller's responsability to guard it when mutating it.
+	Logger *log.Logger
+
 	httpGate        *syncutil.Gate
 	transportConfig *TransportConfig // or nil
 
@@ -195,7 +202,7 @@ func (c *Client) NewPathClient(path string) *Client {
 func NewStorageClient(s blobserver.Storage) *Client {
 	return &Client{
 		sto:       s,
-		log:       log.New(os.Stderr, "", log.Ldate|log.Ltime),
+		Logger:    log.New(os.Stderr, "", log.Ldate|log.Ltime),
 		haveCache: noHaveCache{},
 	}
 }
@@ -404,11 +411,12 @@ func (c *Client) SetHaveCache(cache HaveCache) {
 	c.haveCache = cache
 }
 
-func (c *Client) SetLogger(logger *log.Logger) {
-	if logger == nil {
-		c.log = log.New(ioutil.Discard, "", 0)
-	} else {
-		c.log = logger
+func (c *Client) printf(format string, v ...interface{}) {
+	if c.Logger == nil {
+		return
+	}
+	if c.Verbose {
+		c.Logger.Printf(format, v)
 	}
 }
 
@@ -1304,7 +1312,7 @@ func newClient(server string, mode auth.AuthMode, opts ...ClientOption) *Client 
 	c := &Client{
 		server:    server,
 		haveCache: noHaveCache{},
-		log:       log.New(os.Stderr, "", log.Ldate|log.Ltime),
+		Logger:    log.New(os.Stderr, "", log.Ldate|log.Ltime),
 		authMode:  mode,
 	}
 	for _, v := range opts {
