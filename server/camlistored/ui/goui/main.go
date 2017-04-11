@@ -20,6 +20,7 @@ package main
 
 import (
 	"camlistore.org/server/camlistored/ui/goui/aboutdialog"
+	"camlistore.org/server/camlistored/ui/goui/dirchildren"
 	"camlistore.org/server/camlistored/ui/goui/downloadbutton"
 	"camlistore.org/server/camlistored/ui/goui/geo"
 	"camlistore.org/server/camlistored/ui/goui/mapquery"
@@ -35,6 +36,7 @@ func main() {
 		"DownloadItemsBtn":       downloadbutton.New,
 		"ShareItemsBtn":          sharebutton.New,
 		"SelectAllBtn":           selectallbutton.New,
+		"NewDirChildren":         dirchildren.New,
 		"Geocode":                geo.Lookup,
 		"IsLocPredicate":         geo.IsLocPredicate,
 		"HandleLocAreaPredicate": geo.HandleLocAreaPredicate,
