@@ -192,7 +192,7 @@ func (fi *FakeIndex) GetFileLocation(ctx context.Context, fileRef blob.Ref) (cam
 	return camtypes.Location{}, os.ErrNotExist
 }
 
-func (fi *FakeIndex) GetDirMembers(dir blob.Ref, dest chan<- blob.Ref, limit int) error {
+func (fi *FakeIndex) GetDirMembers(ctx context.Context, dir blob.Ref, dest chan<- blob.Ref, limit int) error {
 	panic("NOIMPL")
 }
 
