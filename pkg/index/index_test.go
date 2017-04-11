@@ -26,11 +26,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"camlistore.org/pkg/blob"
 	"camlistore.org/pkg/blobserver"
 	"camlistore.org/pkg/index"
 	"camlistore.org/pkg/index/indextest"
+	"camlistore.org/pkg/jsonsign"
+	"camlistore.org/pkg/schema"
 	"camlistore.org/pkg/sorted"
 	"camlistore.org/pkg/test"
 	"camlistore.org/pkg/types/camtypes"
@@ -557,4 +560,136 @@ func TestFixMissingWholeref(t *testing.T) {
 	if fi.WholeRef.String() != parts[3] {
 		t.Fatalf("index fileInfo wholeref was not fixed: got %q, wanted %v", fi.WholeRef, parts[3])
 	}
+}
+
+// tests that we add the missing share claims rows when going from a v5 to v6
+// index.
+func TestAddMissingKeyShare(t *testing.T) {
+	tf := new(test.Fetcher)
+	s := sorted.NewMemoryKeyValue()
+
+	ix, err := index.New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix.InitBlobSource(tf)
+	ix.KeyFetcher = tf
+	signer, armorPub := newSigner(t)
+
+	add := func(b *test.Blob) {
+		tf.AddBlob(b)
+		if _, err := ix.ReceiveBlob(b.BlobRef(), b.Reader()); err != nil {
+			t.Fatalf("ReceiveBlob(%v): %v", b.BlobRef(), err)
+		}
+	}
+	// populate with a file
+	add(chunk1)
+	add(chunk2)
+	add(chunk3)
+	add(fileBlob)
+	// add gpg key
+	pubKeyBlob := &test.Blob{armorPub}
+	add(pubKeyBlob)
+	// populate with claim and permanode, just as noise.
+	pn := schema.NewPlannedPermanode("noice")
+	signed, err := pn.SignAt(signer, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	add(&test.Blob{signed})
+	attr := schema.NewSetAttributeClaim(blob.SHA1FromString(signed), "camliContent", fileBlob.BlobRef().String())
+	signed, err = attr.SignAt(signer, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	add(&test.Blob{signed})
+
+	// add share claim
+	sigTime := time.Now().UTC()
+	share := schema.NewShareRef(schema.ShareHaveRef, true).
+		SetShareTarget(fileBlob.BlobRef()).
+		SetShareIsTransitive(true)
+	signed, err = share.SignAt(signer, sigTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareRef := blob.SHA1FromString(signed)
+	add(&test.Blob{signed})
+
+	// revert index version at 5 to trigger the fix
+	if err := s.Set("schemaversion", "5"); err != nil {
+		t.Fatal(err)
+	}
+
+	// init broken index
+	ix, err = index.New(s)
+	if err != index.Exp_ErrMissingKeyShare {
+		t.Fatalf("wrong error upon index initialization: got %v, wanted %v", err, index.Exp_ErrMissingKeyShare)
+	}
+	ix.InitBlobSource(tf)
+	ix.KeyFetcher = tf
+	// and fix it
+	if err := ix.Exp_AddMissingKeyShare(tf); err != nil {
+		t.Fatal(err)
+	}
+
+	// init fixed index
+	ix, err = index.New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix.InitBlobSource(tf)
+	ix.KeyFetcher = tf
+	corpus, err := ix.KeepInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// and check that the value is now actually fixed
+	shares := corpus.Shares()
+	got, want := len(shares), 1
+	if got != want {
+		t.Fatalf("wrong number of share claims: got %v, wanted %v", got, want)
+	}
+	claimDate, err := share.Blob().ClaimDate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClaim := &camtypes.Claim{
+		BlobRef: shareRef,
+		Signer:  pubKeyBlob.BlobRef(),
+		// TODO(mpl): I think we should really have sigTime here, but it
+		// seems we have a bug and we don't update the claim date when
+		// signing the claim.
+		Date:       claimDate,
+		Target:     fileBlob.BlobRef(),
+		Transitive: true,
+		Type:       string(schema.ShareClaim),
+	}
+	gotClaim, ok := shares[shareRef]
+	if !ok {
+		t.Fatalf("expected share claim %q not found", shareRef)
+	}
+	if *gotClaim != *wantClaim {
+		t.Fatalf("wrong claim found: got %v, wanted %v", gotClaim, wantClaim)
+	}
+}
+
+// newSigner returns the armored public key of the newly created signer as well,
+// so we can upload it to the index.
+func newSigner(t *testing.T) (*schema.Signer, string) {
+	ent, err := jsonsign.NewEntity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	armorPub, err := jsonsign.ArmoredPublicKey(ent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubRef := blob.SHA1FromString(armorPub)
+	sig, err := schema.NewSigner(pubRef, strings.NewReader(armorPub), ent)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return sig, armorPub
 }

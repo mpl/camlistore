@@ -58,6 +58,8 @@ type Claim struct {
 
 	// If a DeleteClaim or a ShareClaim
 	Target blob.Ref
+	// If a Share claim, whether it's transitive.
+	Transitive bool
 }
 
 func (c *Claim) String() string {

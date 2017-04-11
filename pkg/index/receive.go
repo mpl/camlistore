@@ -790,6 +790,24 @@ func (ix *Index) populateDeleteClaim(ctx context.Context, cl schema.Claim, vr *j
 	return nil
 }
 
+// populateShareClaim adds to mm a keyShare entry is cl is a valid share claim.
+// It is assumed cl is a valid claim, and vr has already been verified.
+func (ix *Index) populateShareClaim(ctx context.Context, cl *schema.Blob, vr *jsonsign.VerifyRequest, mm *mutationMap) error {
+	br := cl.BlobRef()
+	claim, _ := cl.AsClaim()
+	share, ok := cl.AsShare()
+	if !ok {
+		log.Printf("Share claim %v was ignored", br)
+	}
+	transitive := "N"
+	if share.IsTransitive() {
+		transitive = "Y"
+	}
+	shareKey := keyShare.Key(br, vr.CamliSigner)
+	mm.Set(shareKey, keyShare.Val(share.Target(), claim.ClaimDateString(), transitive))
+	return nil
+}
+
 func (ix *Index) populateClaim(ctx context.Context, fetcher *missTrackFetcher, b *schema.Blob, mm *mutationMap) error {
 	br := b.BlobRef()
 
@@ -820,6 +838,13 @@ func (ix *Index) populateClaim(ctx context.Context, fetcher *missTrackFetcher, b
 			return err
 		}
 		mm.noteDelete(claim)
+		return nil
+	}
+
+	if claim.ClaimType() == string(schema.ShareClaim) {
+		if err := ix.populateShareClaim(ctx, b, vr, mm); err != nil {
+			return err
+		}
 		return nil
 	}
 

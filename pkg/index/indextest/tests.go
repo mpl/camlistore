@@ -176,6 +176,13 @@ func (id *IndexDeps) Delete(target blob.Ref) blob.Ref {
 	return id.uploadAndSign(m)
 }
 
+func (id *IndexDeps) Share(target blob.Ref, transitive bool) blob.Ref {
+	m := schema.NewShareRef(schema.ShareHaveRef, transitive)
+	m.SetShareTarget(target)
+	m.SetClaimDate(id.advanceTime())
+	return id.uploadAndSign(m)
+}
+
 var noTime = time.Time{}
 
 func (id *IndexDeps) UploadString(v string) blob.Ref {

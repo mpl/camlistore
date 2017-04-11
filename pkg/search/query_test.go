@@ -1515,7 +1515,6 @@ func testAroundUnsortedSource(limit, pos int, t *testing.T) {
 		}
 		qt.wantRes(sq, want...)
 	})
-
 }
 
 func TestQueryAroundCenter(t *testing.T) {
@@ -1528,6 +1527,110 @@ func TestQueryAroundNear(t *testing.T) {
 
 func TestQueryAroundFar(t *testing.T) {
 	testAroundUnsortedSource(3, 4, t)
+}
+
+func TestFindShares(t *testing.T) {
+	testQueryTypes(t, memIndexTypes, func(qt *queryTest) {
+		id := qt.id
+
+		// Setup for non-recursive queries (i.e. testing only for direct
+		// shares, regardless of whether the claim is transitive)
+		fileRef, _ := id.UploadFile("file.txt", "the content", time.Unix(1382073153, 0))
+		fileRef2, _ := id.UploadFile("file2.txt", "the content2", time.Unix(1382073153, 0))
+		// Permanodes are not technically needed, but setting their
+		// camliContent will create some extra non-share claims, which we
+		// don't want to see in the results, as additional noise.
+		p1 := id.NewPlannedPermanode("1")
+		p2 := id.NewPlannedPermanode("2")
+		id.AddAttribute(p1, "camliContent", fileRef.String())
+		id.AddAttribute(p2, "camliContent", fileRef2.String())
+		s1 := id.Share(fileRef, false)
+		s1t := id.Share(fileRef, true)
+		s2t := id.Share(fileRef2, true)
+
+		// Setup for recursive queries (i.e. testing for sharing transitivity)
+		fileRef3, _ := id.UploadFile("file3.txt", "the content3", time.Unix(1382073153, 0))
+		parentdir := id.UploadDir("parentdir", []blob.Ref{fileRef3}, time.Unix(2382073153, 0))
+		grandparentdir := id.UploadDir("grandparentdir", []blob.Ref{parentdir}, time.Unix(3382073153, 0))
+		s3t := id.Share(grandparentdir, true)
+		s3 := id.Share(fileRef3, false)
+
+		// list all shares
+		sq := &SearchQuery{
+			Constraint: &Constraint{
+				Claim: &ClaimConstraint{Share: &ShareConstraint{Any: true}},
+			},
+		}
+		qt.wantRes(sq, s1, s1t, s2t, s3, s3t)
+
+		// list all transitive shares
+		sq = &SearchQuery{
+			Constraint: &Constraint{Claim: &ClaimConstraint{Share: &ShareConstraint{
+				Transitive: true,
+			}}},
+		}
+		qt.wantRes(sq, s1t, s2t, s3t)
+
+		// find claims responsible for fileRef being shared
+		sq = &SearchQuery{
+			Constraint: &Constraint{
+				Claim: &ClaimConstraint{Share: &ShareConstraint{
+					Target: fileRef,
+					Any:    true,
+				}},
+			},
+		}
+		qt.wantRes(sq, s1, s1t)
+
+		// find claims responsible for fileRef2 being shared
+		sq = &SearchQuery{
+			Constraint: &Constraint{
+				Claim: &ClaimConstraint{Share: &ShareConstraint{
+					Target: fileRef2,
+					Any:    true,
+				}},
+			},
+		}
+		qt.wantRes(sq, s2t)
+
+		// find that fileRef3 is shared, transitively, because of s3t on grandparentdir.
+		// search by filename.
+		sq = &SearchQuery{
+			Constraint: &Constraint{Claim: &ClaimConstraint{Share: &ShareConstraint{
+				Any: true,
+				TargetInSet: &Constraint{Dir: &DirConstraint{
+					RecursiveContains: &Constraint{File: &FileConstraint{
+						FileName: &StringConstraint{
+							Contains: "file3.txt",
+						},
+					}},
+				}},
+			}}},
+		}
+		qt.wantRes(sq, s3t)
+
+		// more realistically (because the user might not know/remember
+		// how fileRef3 was shared), find out whether fileRef3 was ever
+		// shared, regardless of transitivity.
+		// search by blobref.
+		sq = &SearchQuery{
+			Constraint: &Constraint{Logical: &LogicalConstraint{
+				Op: "or",
+				A: &Constraint{Claim: &ClaimConstraint{Share: &ShareConstraint{
+					Any:    true,
+					Target: fileRef3,
+				}}},
+				B: &Constraint{Claim: &ClaimConstraint{Share: &ShareConstraint{
+					Transitive: true,
+					TargetInSet: &Constraint{Dir: &DirConstraint{
+						RecursiveContains: &Constraint{BlobRefPrefix: fileRef3.String()},
+					}},
+				}}},
+			}},
+		}
+		qt.wantRes(sq, s3, s3t)
+
+	})
 }
 
 // 13 permanodes are created. 1 of them the parent, 11 are children

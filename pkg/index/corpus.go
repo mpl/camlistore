@@ -98,6 +98,9 @@ type Corpus struct {
 	// as the date when that deletion happened.
 	deletes map[blob.Ref][]deletion
 
+	// shares maps a share claim blobRef to the claim's attributes
+	shares map[blob.Ref]*camtypes.Claim
+
 	mediaTags map[blob.Ref]map[string]string // wholeref -> "album" -> "foo"
 
 	permanodesByTime    *lazySortedPermanodes // cache of permanodes sorted by creation time.
@@ -280,6 +283,7 @@ func newCorpus() *Corpus {
 		claimBack:    make(map[blob.Ref][]*camtypes.Claim),
 		dirChildren:  make(map[blob.Ref]map[blob.Ref]struct{}),
 		fileParents:  make(map[blob.Ref]map[blob.Ref]struct{}),
+		shares:       make(map[blob.Ref]*camtypes.Claim),
 	}
 	c.permanodesByModtime = &lazySortedPermanodes{
 		c:      c,
@@ -332,6 +336,7 @@ var corpusMergeFunc = map[string]func(c *Corpus, k, v []byte) error{
 	"meta":                 (*Corpus).mergeMetaRow,
 	"signerkeyid":          (*Corpus).mergeSignerKeyIdRow,
 	"claim":                (*Corpus).mergeClaimRow,
+	keyShare.name:          (*Corpus).mergeShareRow,
 	"fileinfo":             (*Corpus).mergeFileInfoRow,
 	"filetimes":            (*Corpus).mergeFileTimesRow,
 	"imagesize":            (*Corpus).mergeImageSizeRow,
@@ -356,6 +361,7 @@ var slurpPrefixes = []string{
 	"meta:", // must be first
 	"signerkeyid:",
 	"claim|",
+	keyShare.name + "|",
 	"fileinfo|",
 	"filetimes|",
 	"imagesize|",
@@ -612,6 +618,59 @@ func (c *Corpus) mergeClaimRow(k, v []byte) error {
 
 	if vbr, ok := blob.Parse(cl.Value); ok {
 		c.claimBack[vbr] = append(c.claimBack[vbr], &cl)
+	}
+	return nil
+}
+
+func (c *Corpus) Shares() map[blob.Ref]*camtypes.Claim {
+	return c.shares
+}
+
+func (c *Corpus) mergeShareRow(k, v []byte) error {
+	// share|claim|signer -> target|claim_date|transitive
+	// share|sha1-579f7f246bd420d486ddeb0dadbb256cfaf8bf6b|sha1-fb88f3eab3acfcf3cfc8cd77ae4366f6f975d227" -> "sha1-17b53c7c3e664d3613dfdce50ef1f2a09e8f04b5|2006-01-02T15:04:05|Y"
+	pipe1 := bytes.IndexByte(k, '|')
+	if pipe1 < 0 {
+		return fmt.Errorf("invalid share key %q, missing first pipe", k)
+	}
+	pipe2 := bytes.IndexByte(k[pipe1+1:], '|')
+	if pipe2 < 0 {
+		return fmt.Errorf("invalid share key %q, missing second pipe", k)
+	}
+	claim, ok := blob.ParseBytes(k[pipe1+1 : pipe1+1+pipe2])
+	if !ok {
+		return fmt.Errorf("invalid claim blobref %q in share key %q", k[pipe1+1:pipe2], k)
+	}
+	signer, ok := blob.ParseBytes(k[pipe1+1+pipe2+1:])
+	if !ok {
+		return fmt.Errorf("invalid signer blobref %q in share key %q", k[pipe1+1+pipe2+1:], k)
+	}
+
+	pipe1 = bytes.IndexByte(v, '|')
+	if pipe1 < 0 {
+		return fmt.Errorf("invalid share value %q", v)
+	}
+	target, ok := blob.ParseBytes(v[:pipe1])
+	if !ok {
+		return fmt.Errorf("invalid target blobref %q in share value %q", v[:pipe1], v)
+	}
+	c.ss = strutil.AppendSplitN(c.ss[:0], string(v[pipe1+1:]), "|", 2)
+	if len(c.ss) != 2 {
+		return fmt.Errorf("invalid share value %q, missing third pipe", v)
+	}
+	claimDate, err := time.Parse(time.RFC3339, c.ss[0])
+	if err != nil {
+		return fmt.Errorf("invalid claim date in share value %q: %v", c.ss[0], err)
+	}
+	transitive := (c.ss[1] == "Y")
+	claim = c.br(claim)
+	c.shares[claim] = &camtypes.Claim{
+		BlobRef:    claim,
+		Signer:     signer,
+		Date:       claimDate,
+		Target:     target,
+		Transitive: transitive,
+		Type:       string(schema.ShareClaim),
 	}
 	return nil
 }

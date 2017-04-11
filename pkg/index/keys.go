@@ -28,7 +28,8 @@ import (
 // an index key type is added, changed, or removed.
 // Version 4: EXIF tags + GPS
 // Version 5: wholeRef added to keyFileInfo
-const requiredSchemaVersion = 5
+// Version 6: keyShare added
+const requiredSchemaVersion = 6
 
 // type of key returns the identifier in k before the first ":" or "|".
 // (Originally we packed keys by hand and there are a mix of styles)
@@ -333,7 +334,8 @@ var (
 		"dirchild",
 		[]part{
 			{"dirref", typeBlobRef}, // blobref of "directory" schema blob
-			{"child", typeStr},      // blobref of the child
+			// TODO(mpl): why is child not a typeBlobRef?
+			{"child", typeStr}, // blobref of the child
 		},
 		[]part{
 			{"1", typeStr},
@@ -377,6 +379,20 @@ var (
 		[]part{
 			{"lat", typeRawStr},
 			{"long", typeRawStr},
+		},
+	}
+
+	// keyShare maps a share claim ref, to the entity that it shares (the target).
+	keyShare = &keyType{
+		"share",
+		[]part{
+			{"claim", typeBlobRef}, // the claim responsible for the sharing
+			{"signer", typeBlobRef},
+		},
+		[]part{
+			{"target", typeBlobRef}, // the shared entity (a fileRef or dirRef)
+			{"claimdate", typeTime},
+			{"transitive", typeStr}, // 'Y' or 'N'
 		},
 	}
 )

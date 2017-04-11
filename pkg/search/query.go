@@ -320,15 +320,13 @@ func (c *Constraint) checkValid() error {
 	type checker interface {
 		checkValid() error
 	}
-	if c.Claim != nil {
-		return errors.New("TODO: implement ClaimConstraint")
-	}
 	for _, cv := range []checker{
 		c.Logical,
 		c.File,
 		c.Dir,
 		c.BlobSize,
 		c.Permanode,
+		c.Claim,
 	} {
 		if err := cv.checkValid(); err != nil {
 			return err
@@ -612,14 +610,112 @@ type TimeConstraint struct {
 	InLast time.Duration `json:"inLast"` // >=
 }
 
+// ShareConstraint enables searching for share claims, and shared items (share
+// claims targets). If neither Target nor TargetInSet is set, any share claim
+// matching the other fields is a match. Target and TargetInSet are mutually
+// exclusive.
+type ShareConstraint struct {
+	// Target is the entity that is explicitly shared, usually a fileRef or dirRef.
+	Target blob.Ref `json:"target,omitempty"`
+	// TargetInSet, if not nil, is run as a subquery against the target
+	// of the checked claim. It is mainly used to implement searching for
+	// transitively shared files/directories.
+	TargetInSet *Constraint `json:"targetInSet,omitempty"`
+	// Transitive restricts the result to whether the claim is transitive.
+	Transitive bool `json:"transitive,omitempty"`
+	// Any, if set, overrides Transitive and matches results regardless of
+	// the transitiveness.
+	Any bool
+}
+
 type ClaimConstraint struct {
-	SignedBy     string    `json:"signedBy"` // identity
-	SignedAfter  time.Time `json:"signedAfter"`
-	SignedBefore time.Time `json:"signedBefore"`
+	// SignedBy is the signer of the claim.
+	SignedBy blob.Ref `json:"signedBy"`
+	// Share specifies if and how the Claim is a share claim. It is required for now.
+	Share *ShareConstraint `json:"share,omitempty"`
+	// SignedAfter, if present, requires the constraint to match only if the
+	// claim time is strictly after SignedAfter.
+	SignedAfter time.Time `json:"signedAfter,omitempty"` // strictly after
+	// SignedBefore, if present, requires the constraint to match only if
+	// the claim time is strictly before SignedBefore.
+	SignedBefore time.Time `json:"signedBefore,omitempty"` // strictly before
 }
 
 func (c *ClaimConstraint) checkValid() error {
-	return errors.New("TODO: implement blobMatches and checkValid on ClaimConstraint")
+	if c == nil {
+		return nil
+	}
+	if c.Share == nil {
+		return errors.New("Invalid ClaimConstraint: Share is required, as we only index share claims for now.")
+	}
+	if c.Share.Target.Valid() && c.Share.TargetInSet != nil {
+		return errors.New("Target and TargetInSet in a ShareConstraint are mutually exclusive")
+	}
+	return nil
+}
+
+func (c *ClaimConstraint) blobMatches(ctx context.Context, s *search, br blob.Ref, bm camtypes.BlobMeta) (bool, error) {
+	corpus := s.h.corpus
+	if corpus == nil {
+		return false, errors.New("ClaimConstraint requires an in-memory corpus")
+	}
+	if bm.CamliType != "claim" {
+		return false, nil
+	}
+	shares := corpus.Shares()
+	// We only use ClaimConstraints for shares for now
+	if shares == nil {
+		// TODO: change this when/if we use ClaimConstraint for something other than share searches
+		return false, nil
+	}
+	claim, ok := shares[br]
+	if !ok {
+		return false, nil
+	}
+	if !claim.Target.Valid() {
+		return false, nil
+	}
+	if c.Share.Target.Valid() && claim.Target != c.Share.Target {
+		return false, nil
+	}
+	if subc := c.Share.TargetInSet; subc != nil {
+		meta, err := s.blobMeta(ctx, claim.Target)
+		if err == os.ErrNotExist {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		subMatch, err := subc.matcher()(ctx, s, claim.Target, meta)
+		if err != nil {
+			return false, err
+		}
+		if !subMatch {
+			return false, nil
+		}
+		// Even if subquery matches, check against other constraints.
+	}
+	// Ignore transitiveness if Any is set.
+	if !c.Share.Any {
+		if claim.Transitive != c.Share.Transitive {
+			return false, nil
+		}
+	}
+	if c.SignedBy.Valid() && c.SignedBy != claim.Signer {
+		return false, nil
+	}
+	if !c.SignedAfter.IsZero() {
+		if !claim.Date.After(c.SignedAfter) {
+			return false, nil
+		}
+	}
+	if !c.SignedBefore.IsZero() {
+		if !claim.Date.Before(c.SignedBefore) {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 type LogicalConstraint struct {
@@ -1424,7 +1520,9 @@ func (c *Constraint) genMatcher() matchFn {
 	if c.Permanode != nil {
 		addCond(c.Permanode.blobMatches)
 	}
-	// TODO: ClaimConstraint
+	if c.Claim != nil {
+		addCond(c.Claim.blobMatches)
+	}
 	if c.File != nil {
 		addCond(c.File.blobMatches)
 	}

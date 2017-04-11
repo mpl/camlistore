@@ -149,8 +149,11 @@ func New(s sorted.KeyValue) (*Index, error) {
 			// the user with a more useful tip:
 			tip = `(For the dev server, run "devcam server --wipe" to wipe both your blobs and index)`
 		} else {
-			if is4To5SchemaBump(schemaVersion) {
+			if is4To6SchemaBump(schemaVersion) {
 				return idx, errMissingWholeRef
+			}
+			if is5To6SchemaBump(schemaVersion) {
+				return idx, errMissingKeyShare
 			}
 			tip = "Run 'camlistored --reindex' (it might take awhile, but shows status). Alternative: 'camtool dbinit' (or just delete the file for a file based index), and then 'camtool sync --all'"
 		}
@@ -166,18 +169,29 @@ func New(s sorted.KeyValue) (*Index, error) {
 	return idx, nil
 }
 
-func is4To5SchemaBump(schemaVersion int) bool {
-	return schemaVersion == 4 && requiredSchemaVersion == 5
+func is4To6SchemaBump(schemaVersion int) bool {
+	return schemaVersion == 4 && requiredSchemaVersion == 6
 }
 
-var errMissingWholeRef = errors.New("missing wholeRef field in fileInfo rows")
+func is5To6SchemaBump(schemaVersion int) bool {
+	return schemaVersion == 5 && requiredSchemaVersion == 6
+}
+
+var (
+	errMissingWholeRef = errors.New("missing wholeRef field in fileInfo rows")
+	errMissingKeyShare = errors.New("potentially unindexed share claims")
+)
+
+// TODO(mpl): remove fixMissingWholeRef?
 
 // fixMissingWholeRef appends the wholeRef to all the keyFileInfo rows values. It should
 // only be called to upgrade a version 4 index schema to version 5.
-func (x *Index) fixMissingWholeRef(fetcher blob.Fetcher) (err error) {
+// This func is deprecated since we've moved to schema version 6. The force
+// argument is so we can still call it from tests.
+func (x *Index) fixMissingWholeRef(fetcher blob.Fetcher, force bool) (err error) {
 	// We did that check from the caller, but double-check again to prevent from misuse
 	// of that function.
-	if x.schemaVersion() != 4 || requiredSchemaVersion != 5 {
+	if x.schemaVersion() != 4 || requiredSchemaVersion != 5 && !force {
 		panic("fixMissingWholeRef should only be used when upgrading from v4 to v5 of the index schema")
 	}
 	log.Println("index: fixing the missing wholeRef in the fileInfo rows...")
@@ -267,12 +281,103 @@ func (x *Index) fixMissingWholeRef(fetcher blob.Fetcher) (err error) {
 	for k, v := range mutations {
 		bm.Set(k, v)
 	}
-	bm.Set(keySchemaVersion.name, "5")
+	bm.Set(keySchemaVersion.name, fmt.Sprintf("%d", requiredSchemaVersion))
 	if err := x.s.CommitBatch(bm); err != nil {
 		return err
 	}
 	if missedEntries > 0 {
 		log.Printf("Some missing wholeRef entries were not fixed (%d), you should do a full reindex.", missedEntries)
+	}
+	return nil
+}
+
+// addMissingkeyShare adds the index.keyShare rows that are inserted when a
+// share claim is received. It is meant to run on a v5 index schema, which lacks
+// these rows since they were defined as of v6.
+func (x *Index) addMissingKeyShare(bs blobserver.FetcherEnumerator) (err error) {
+	// We did that check from the caller, but double-check again to prevent from misuse
+	// of that function.
+	if x.schemaVersion() != 5 || requiredSchemaVersion != 6 {
+		panic("addMissingkeyShare should only be used when upgrading from v5 to v6 of the index schema")
+	}
+	log.Println("index: adding the missing keyShare rows...")
+	defer func() {
+		if err != nil {
+			log.Printf("index: adding the keyShare rows failed: %v", err)
+			return
+		}
+		log.Print("index: successfully added keyShare rows.")
+	}()
+
+	ctx := context.Background()
+
+	blobc := make(chan blob.Ref)
+	errc := make(chan error)
+	go func() {
+		err := blobserver.EnumerateAll(ctx, bs, func(sb blob.SizedRef) error {
+			blobc <- sb.Ref
+			return nil
+		})
+		close(blobc)
+		errc <- err
+	}()
+
+	mm := &mutationMap{
+		kv: map[string]string{},
+	}
+	var addedRows, failedRows int
+	for br := range blobc {
+		sniffer := NewBlobSniffer(br)
+		rd, size, err := bs.Fetch(br)
+		if err != nil {
+			log.Printf("index: could not Fetch %v: %v", br, err)
+			continue
+		}
+		if _, err = io.Copy(sniffer, rd); err != nil {
+			log.Printf("index: could not sniff %v: %v", br, err)
+			continue
+		}
+		sniffer.Parse()
+		if sniffer.CamliType() != "claim" {
+			continue
+		}
+		blob, ok := sniffer.SchemaBlob()
+		if !ok || blob.Type() != "claim" {
+			continue
+		}
+		claim, ok := blob.AsClaim()
+		if !ok {
+			continue
+		}
+		if claim.ClaimType() != string(schema.ShareClaim) {
+			continue
+		}
+		mtf := &missTrackFetcher{
+			fetcher: bs,
+		}
+		if err := x.populateClaim(ctx, mtf, blob, mm); err != nil {
+			log.Printf("index: could not index %v as share claim: %v", br, err)
+			failedRows++
+			continue
+		}
+		mm.Set("meta:"+br.String(), fmt.Sprintf("%d|%s", size, sniffer.MIMEType()))
+		mm.Set("have:"+br.String(), fmt.Sprintf("%d|indexed", size))
+		addedRows++
+	}
+	if err := <-errc; err != nil {
+		return fmt.Errorf("error while enumerating all claims: %v", err)
+	}
+	log.Printf("Starting to commit the missing keyShare rows (%d) now, this can take a while.", addedRows)
+	bm := x.s.BeginBatch()
+	for k, v := range mm.kv {
+		bm.Set(k, v)
+	}
+	bm.Set(keySchemaVersion.name, fmt.Sprintf("%d", requiredSchemaVersion))
+	if err := x.s.CommitBatch(bm); err != nil {
+		return err
+	}
+	if failedRows > 0 {
+		log.Printf("Some missing share claim rows were not added (%d), you should investigate the log messages or do a full reindex.", failedRows)
 	}
 	return nil
 }
@@ -312,15 +417,10 @@ func newFromConfig(ld blobserver.Loader, config jsonconfig.Obj) (blobserver.Stor
 	}
 
 	ix, err := New(kv)
-	// TODO(mpl): next time we need to do another fix, make a new error
-	// type that lets us apply the needed fix depending on its value or
-	// something. For now just one value/fix.
-	if err == errMissingWholeRef {
-		// TODO: maybe we don't want to do that automatically. Brad says
-		// we have to think about the case on GCE/CoreOS in particular.
-		if err := ix.fixMissingWholeRef(sto); err != nil {
+	if err == errMissingKeyShare {
+		if err := ix.addMissingKeyShare(sto); err != nil {
 			ix.Close()
-			return nil, fmt.Errorf("could not fix missing wholeRef entries: %v", err)
+			return nil, fmt.Errorf("could not add missing share claims rows: %v", err)
 		}
 		ix, err = New(kv)
 	}

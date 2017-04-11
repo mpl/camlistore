@@ -125,10 +125,16 @@ func (x *Index) Exp_BlobSource() blobserver.FetcherEnumerator {
 }
 
 func (x *Index) Exp_FixMissingWholeRef(fetcher blob.Fetcher) (err error) {
-	return x.fixMissingWholeRef(fetcher)
+	return x.fixMissingWholeRef(fetcher, true)
 }
 
 var Exp_ErrMissingWholeRef = errMissingWholeRef
+
+func (x *Index) Exp_AddMissingKeyShare(bs blobserver.FetcherEnumerator) (err error) {
+	return x.addMissingKeyShare(bs)
+}
+
+var Exp_ErrMissingKeyShare = errMissingKeyShare
 
 var Exp_KeyRecentPermanode = keyRecentPermanode
 
