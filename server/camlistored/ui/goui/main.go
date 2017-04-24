@@ -23,6 +23,7 @@ import (
 	"camlistore.org/server/camlistored/ui/goui/dirchildren"
 	"camlistore.org/server/camlistored/ui/goui/downloadbutton"
 	"camlistore.org/server/camlistored/ui/goui/geo"
+	"camlistore.org/server/camlistored/ui/goui/importshare"
 	"camlistore.org/server/camlistored/ui/goui/mapquery"
 	"camlistore.org/server/camlistored/ui/goui/selectallbutton"
 	"camlistore.org/server/camlistored/ui/goui/sharebutton"
@@ -35,6 +36,7 @@ func main() {
 		"AboutMenuItem":          aboutdialog.New,
 		"DownloadItemsBtn":       downloadbutton.New,
 		"ShareItemsBtn":          sharebutton.New,
+		"ImportShare":            importshare.Import,
 		"SelectAllBtn":           selectallbutton.New,
 		"NewDirChildren":         dirchildren.New,
 		"Geocode":                geo.Lookup,

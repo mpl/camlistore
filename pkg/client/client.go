@@ -217,6 +217,11 @@ type TransportConfig struct {
 	// camput for debugging even localhost requests.
 	Proxy   func(*http.Request) (*url.URL, error)
 	Verbose bool // Verbose enables verbose logging of HTTP requests.
+	// Default defines whether to use the standard library default as the
+	// transport. Otherwise, a transport with specific Dial* functions is
+	// defined. This option mainly exists to avoid calling such Dial functions
+	// when using gopherjs, since it is prohibited.
+	Default bool
 }
 
 func (c *Client) useHTTP2(tc *TransportConfig) bool {
@@ -237,6 +242,7 @@ func (c *Client) useHTTP2(tc *TransportConfig) bool {
 
 // transportForConfig returns a transport for the client, setting the correct
 // Proxy, Dial, and TLSClientConfig if needed. It does not mutate c.
+// If tc.Default, nil is returned.
 // It is the caller's responsibility to then use that transport to set
 // the client's httpClient with SetHTTPClient.
 func (c *Client) transportForConfig(tc *TransportConfig) http.RoundTripper {
@@ -248,6 +254,9 @@ func (c *Client) transportForConfig(tc *TransportConfig) http.RoundTripper {
 		return nil
 	}
 	if c == nil {
+		return nil
+	}
+	if tc != nil && tc.Default {
 		return nil
 	}
 	var transport http.RoundTripper

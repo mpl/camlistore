@@ -147,6 +147,12 @@ cam.IndexPage = React.createClass({
 			currentSet: '',
 			dropActive: false,
 			selection: {},
+			// TODO(mpl): maybe I should make a new form component,
+			// and importShareURL would be one of its
+			// attributes/properties, instead of being here, but I
+			// don't think it's shocking either to have it here as it's
+			// the same kind of user input as selection.
+			importShareURL: null,
 			serverStatus: null,
 			// we keep track of where a touch started, so we can
 			// tell when the touch ends if we consider it a swipe. We
@@ -743,6 +749,7 @@ cam.IndexPage = React.createClass({
 				}, this),
 				onUpload: this.handleUpload_,
 				onNewPermanode: this.handleCreateSetWithSelection_,
+				onImportShare: this.getImportShareDialog_,
 				onSearch: this.setSearch_,
 				favoritesURL: this.getFavoritesURL_(),
 				statusURL: this.baseURL_.resolve(new goog.Uri(this.props.config.statusRoot)),
@@ -807,6 +814,51 @@ cam.IndexPage = React.createClass({
 				this.addMembersToSet_(permanode, selection);
 			}.bind(this));
 		}.bind(this));
+	},
+
+	getImportShareDialog_: function() {
+		this.updateImportShareDialog_('');
+	},
+
+	updateImportShareDialog_: function(resultMessage) {
+		this.setState({
+			messageDialogVisible: true,
+			messageDialogContents: React.DOM.div({
+				style: {
+					textAlign: 'center',
+					position: 'relative',
+				},},
+				React.DOM.div({}, 'Import from a share URL'),
+				React.DOM.div({},
+					React.DOM.form({onSubmit: function(e) {
+						e.preventDefault();
+						// TODO(mpl): It is probably inefficient that we're resetting
+						// the whole of messageDialogContents (by calling
+						// updateImportShareDialog_) when what we only want to do is
+						// refresh the very last div, containing the import
+						// progress/error message. We could have more granularity by
+						// using another state variable that this last div would use, but
+						// that would mean adding that new variable to cam.Dialog, which
+						// seems pretty gross. We probably need a new component or
+						// something. But otoh, react is supposed to be pretty smart at
+						// working out diffs by itself, so I think that works for now.
+						goreact.ImportShare(this.props.config.authToken, this.state.importShareURL, this.updateImportShareDialog_);
+					}.bind(this)},
+					React.DOM.input({
+						type: 'text',
+						onChange: function(e) {
+							this.setState({importShareURL: e.target.value});
+						}.bind(this),
+						placeholder: 'https://yourfriendserver/share/sha1-shareclaim',
+						size: 40,
+						style: {textAlign: 'center',},
+					}),
+					React.DOM.button({type: 'submit'}, 'Import')
+					)
+				),
+				React.DOM.div({}, ''+resultMessage)
+			),
+		});
 	},
 
 	addMembersToSet_: function(permanode, blobrefs) {
@@ -1321,6 +1373,7 @@ cam.IndexPage = React.createClass({
 					this.setState({
 						messageDialogVisible: false,
 						messageDialogContents: null,
+						importShareURL: null,
 					});
 				}.bind(this),
 			},
