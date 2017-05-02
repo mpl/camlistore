@@ -87,7 +87,7 @@ func (c *makeStaticCmd) RunCommand(args []string) error {
 		return m.CamliType
 	}
 
-	var ss schema.StaticSet
+	ss := schema.NewStaticSet()
 	pnDes, ok := res.Meta[pn.String()]
 	if !ok {
 		return fmt.Errorf("permanode %v not described", pn)
@@ -99,6 +99,7 @@ func (c *makeStaticCmd) RunCommand(args []string) error {
 	if len(members) == 0 {
 		return fmt.Errorf("permanode %v has no camliMember attributes", pn)
 	}
+	var children []blob.Ref
 	for _, fileRefStr := range members {
 		if camliType(fileRefStr) != "permanode" {
 			continue
@@ -108,10 +109,19 @@ func (c *makeStaticCmd) RunCommand(args []string) error {
 			continue
 		}
 		if camliType(contentRef) == "file" {
-			ss.Add(blob.MustParse(contentRef))
+			children = append(children, blob.MustParse(contentRef))
 		}
 	}
+	subsets := ss.SetStaticSetMembers(children)
 
+	if len(subsets) > 0 {
+		// large file, so the top static-set is divided in subsets that we have to upload too
+		for _, v := range subsets {
+			if _, err := cl.UploadBlob(v); err != nil {
+				return err
+			}
+		}
+	}
 	b := ss.Blob()
 	_, err = cl.UploadBlob(b)
 	if err != nil {

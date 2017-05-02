@@ -92,7 +92,16 @@ func (dr *DirReader) StaticSet() ([]blob.Ref, error) {
 	if !staticSetBlobref.Valid() {
 		return nil, errors.New("schema/dirreader: Invalid blobref")
 	}
-	rsc, _, err := dr.fetcher.Fetch(staticSetBlobref)
+	members, err := staticSet(staticSetBlobref, dr.fetcher)
+	if err != nil {
+		return nil, err
+	}
+	dr.staticSet = members
+	return dr.staticSet, nil
+}
+
+func staticSet(staticSetBlobref blob.Ref, fetcher blob.Fetcher) ([]blob.Ref, error) {
+	rsc, _, err := fetcher.Fetch(staticSetBlobref)
 	if err != nil {
 		return nil, fmt.Errorf("schema/dirreader: fetching schema blob %s: %v", staticSetBlobref, err)
 	}
@@ -104,13 +113,23 @@ func (dr *DirReader) StaticSet() ([]blob.Ref, error) {
 	if ss.Type != "static-set" {
 		return nil, fmt.Errorf("schema/dirreader: expected \"static-set\" schema blob for %s, got %q", staticSetBlobref, ss.Type)
 	}
+	var members []blob.Ref
 	for _, member := range ss.Members {
 		if !member.Valid() {
 			return nil, fmt.Errorf("schema/dirreader: invalid (static-set member) blobref referred by \"static-set\" schema blob %v", staticSetBlobref)
 		}
-		dr.staticSet = append(dr.staticSet, member)
+		if ss.LargeDir {
+			// TODO(mpl): do it concurrently
+			subset, err := staticSet(member, fetcher)
+			if err != nil {
+				return nil, fmt.Errorf("schema/dirreader: could not get members of %q, subset of %v: %v", member, staticSetBlobref, err)
+			}
+			members = append(members, subset...)
+			continue
+		}
+		members = append(members, member)
 	}
-	return dr.staticSet, nil
+	return members, nil
 }
 
 // Readdir implements the Directory interface.
