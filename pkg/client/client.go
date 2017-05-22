@@ -155,6 +155,10 @@ type Client struct {
 const maxParallelHTTP_h1 = 5
 const maxParallelHTTP_h2 = 50
 
+// onBrowser reports whether the client package is compiled by GopherJS, for use
+// in the browser.
+var onBrowser bool
+
 // New returns a new Camlistore Client.
 // The provided server is either "host:port" (assumed http, not https) or a URL prefix, with or without a path, or a server alias from the client configuration file. A server alias should not be confused with a hostname, therefore it cannot contain any colon or period.
 // Errors are not returned until subsequent operations.
@@ -236,6 +240,13 @@ func (c *Client) useHTTP2(tc *TransportConfig) bool {
 // It is the caller's responsibility to then use that transport to set
 // the client's httpClient with SetHTTPClient.
 func (c *Client) transportForConfig(tc *TransportConfig) http.RoundTripper {
+	if onBrowser {
+		// Calls to net.Dial* functions - which would happen if the client's transport
+		// is not nil - are prohibited with GopherJS. So we force nil here, so that the
+		// call to transportForConfig in newClient is of no consequence when on the
+		// browser.
+		return nil
+	}
 	if c == nil {
 		return nil
 	}
@@ -329,6 +340,18 @@ type optionSameOrigin bool
 
 func (o optionSameOrigin) modifyClient(c *Client) {
 	c.sameOrigin = bool(o)
+}
+
+// OptionParamsOnly sets whether the client initializes with the configuration
+// file and environment variables. NewFromParams uses OptionParamsOnly.
+func OptionParamsOnly(v bool) ClientOption {
+	return optionParamsOnly(v)
+}
+
+type optionParamsOnly bool
+
+func (o optionParamsOnly) modifyClient(c *Client) {
+	c.paramsOnly = bool(o)
 }
 
 // noop is for use with syncutil.Onces.
@@ -1300,8 +1323,14 @@ func (c *Client) Close() error {
 // and auth but does not use any on-disk config files or environment variables
 // for its configuration. It may still use the disk for caches.
 func NewFromParams(server string, mode auth.AuthMode, opts ...ClientOption) *Client {
-	cl := newClient(server, mode, opts...)
-	cl.paramsOnly = true
+	// paramsOnly = true needs to be passed as soon as an argument, because
+	// there are code paths in newClient (c.transportForConfig) that can lead
+	// to parsing the config file.
+	ops := []ClientOption{optionParamsOnly(true)}
+	for _, v := range opts {
+		ops = append(ops, v)
+	}
+	cl := newClient(server, mode, ops...)
 	return cl
 }
 
