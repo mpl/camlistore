@@ -1173,6 +1173,19 @@ func (c *Client) DialTLSFunc() func(network, addr string) (net.Conn, error) {
 			} else {
 				tlsConfig = &tls.Config{InsecureSkipVerify: true}
 			}
+			// Since we're doing the TLS handshake ourselves, we need to set the ServerName,
+			// in case the server uses SNI (as is the case if it's relying on Let's Encrypt,
+			// for example).
+			var serverName string
+			portIdx := strings.Index(addr, ":")
+			if portIdx == -1 {
+				serverName = addr[:portIdx]
+			}
+			serverName, _, err = net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("could not guess ServerName from address: %v", err)
+			}
+			tlsConfig.ServerName = serverName
 			conn = tls.Client(ac, tlsConfig)
 			if err := conn.Handshake(); err != nil {
 				return nil, err
