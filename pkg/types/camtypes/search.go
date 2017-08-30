@@ -279,27 +279,19 @@ type LocationBounds struct {
 	East  float64 `json:"east"`
 }
 
-func (l LocationBounds) isEmpty() bool {
-	return l == (LocationBounds{}) ||
-		l.North == 0 &&
-			l.South == 0 &&
-			l.West == 0 &&
-			l.East == 0
-}
-
-func (l *LocationBounds) isWithinLongitude(loc Location) bool {
-	if l.East < l.West {
+func (lb LocationBounds) isWithinLongitude(loc Location) bool {
+	if lb.East < lb.West {
 		// l is spanning over antimeridian
-		return loc.Longitude >= l.West || loc.Longitude <= l.East
+		return loc.Longitude >= lb.West || loc.Longitude <= lb.East
 	}
-	return loc.Longitude >= l.West && loc.Longitude <= l.East
+	return loc.Longitude >= lb.West && loc.Longitude <= lb.East
 }
 
 // Expand returns a new LocationBounds nb. If either of loc coordinates is
 // outside of b, nb is the dimensions of b expanded as little as possible in
 // order to include loc. Otherwise, nb is just a copy of b.
 func (b LocationBounds) Expand(loc Location) LocationBounds {
-	if b.isEmpty() {
+	if b == (LocationBounds{}) {
 		return LocationBounds{
 			North: loc.Latitude,
 			South: loc.Latitude,
