@@ -100,7 +100,7 @@ cam.SearchSession.prototype.stripMapZoom = function(q) {
 		return null;
 	}
 	if (typeof q === 'string') {
-		return goreact.DeleteMapZoom(q);
+		return goui.DeleteMapZoom(q);
 	}
 	return q;
 };

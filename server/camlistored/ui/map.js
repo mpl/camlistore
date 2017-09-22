@@ -195,21 +195,21 @@ cam.MapAspect = React.createClass({
 	// for now.
 	setCoordinatesFromSearchQuery: function() {
 		var q = this.initialSearchSession.getQueryExprOrRef();
-		if (goreact.IsLocPredicate(q)) {
+		if (goui.IsLocPredicate(q)) {
 			// a "loc" query
-			goreact.Geocode(q.substring(goreact.LocPredicatePrefix.length), function(rect) {
+			goui.Geocode(q.substring(goui.LocPredicatePrefix.length), function(rect) {
 				return this.handleCoordinatesFound(rect, true);
 			}.bind(this));
 			return;
 		}
-		if (goreact.HandleLocAreaPredicate(q, function(rect) {
+		if (goui.HandleLocAreaPredicate(q, function(rect) {
 				return this.handleCoordinatesFound(rect, true);
 			}.bind(this))) {
 			// a "locrect" area query
 			return;
 		}
-		q = goreact.ShiftMapZoom(q);
-		if (goreact.HandleZoomPredicate(q, function(rect) {
+		q = goui.ShiftMapZoom(q);
+		if (goui.HandleZoomPredicate(q, function(rect) {
 				return this.handleCoordinatesFound(rect, false);
 			}.bind(this))) {
 			// we have a zoom (map:) in the query
@@ -225,7 +225,7 @@ cam.MapAspect = React.createClass({
 		if (!rect) {
 			return;
 		}
-		var eastWest = goreact.WrapAntimeridian(rect.East, rect.West);
+		var eastWest = goui.WrapAntimeridian(rect.East, rect.West);
 		rect.West = eastWest.W;
 		rect.East = eastWest.E;
 		if (this.sameLocations(rect, this.location)) {
@@ -288,7 +288,7 @@ cam.MapAspect = React.createClass({
 			q = 'has:location';
 		}
 		if (this.mapQuery == null) {
-			this.mapQuery = goreact.NewMapQuery(this.props.config.authToken, q, this.handleSearchResults,
+			this.mapQuery = goui.NewMapQuery(this.props.config.authToken, q, this.handleSearchResults,
 				function(){
 					this.props.setPendingQuery(false);
 				}.bind(this));

@@ -23,10 +23,22 @@ import (
 	"testing"
 )
 
+var (
+	pkgToken   string
+	pkgRoToken string
+)
+
+func init() {
+	// generate pkg level tokens
+	pkgToken = Token()
+	pkgRoToken = ROToken()
+}
+
+func newString(s string) *string {
+	return &s
+}
+
 func TestFromConfig(t *testing.T) {
-	newString := func(s string) *string {
-		return &s
-	}
 	tests := []struct {
 		in string
 
@@ -40,7 +52,9 @@ func TestFromConfig(t *testing.T) {
 		{in: "userpass:alice:secret", want: &UserPass{Username: "alice", Password: "secret", OrLocalhost: false, VivifyPass: nil}},
 		{in: "userpass:alice:secret:+localhost", want: &UserPass{Username: "alice", Password: "secret", OrLocalhost: true, VivifyPass: nil}},
 		{in: "userpass:alice:secret:+localhost:vivify=foo", want: &UserPass{Username: "alice", Password: "secret", OrLocalhost: true, VivifyPass: newString("foo")}},
-		{in: "devauth:port3179", want: &DevAuth{Password: "port3179", VivifyPass: newString("viviport3179")}},
+		{in: "userpass:alice:secret:+localhost:vivify=foo:ro=welcome", want: &UserPass{Username: "alice", Password: "secret", OrLocalhost: true, VivifyPass: newString("foo"), ReadOnlyPass: newString("welcome")}},
+
+		{in: "devauth:port3179", want: &DevAuth{Password: "port3179", VivifyPass: newString("viviport3179"), ReadOnlyPass: newString("roport3179")}},
 		{in: "basic:alice:secret", want: &UserPass{Username: "alice", Password: "secret", OrLocalhost: false, VivifyPass: nil}},
 		{in: "basic:alice:secret:+localhost", wanterr: `invalid basic auth syntax. got "alice:secret:+localhost", want "username:password"`},
 		{in: "basic:alice:secret:+vivify=foo", wanterr: `invalid basic auth syntax. got "alice:secret:+vivify=foo", want "username:password"`},
@@ -94,7 +108,62 @@ func TestMultiMode(t *testing.T) {
 	if Allowed(req, OpAll) {
 		t.Fatalf("req should not be allowed anymore")
 	}
+}
 
+func TestReadOnlyMode(t *testing.T) {
+	modes = []AuthMode{
+		&UserPass{
+			Username:     "foo",
+			Password:     "bar",
+			ReadOnlyPass: newString("baz"),
+		},
+	}
+
+	// check that pass based auth with read-only password is only allowing OpRead
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&UserPass{Username: "foo", Password: "baz"}).AddAuthHeader(req)
+	if Allowed(req, OpAll) {
+		t.Fatalf("req with userpass should not be allowed for OpAll")
+	}
+	if !Allowed(req, OpRead) {
+		t.Fatalf("req with userpass should be allowed for OpRead")
+	}
+
+	// check that token based auth with read-only token is only allowing OpRead
+	req, err = http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&tokenAuth{token: pkgRoToken}).AddAuthHeader(req)
+	if Allowed(req, OpAll) {
+		t.Fatalf("req with token should not be allowed for OpAll")
+	}
+	if !Allowed(req, OpRead) {
+		t.Fatalf("req with token should be allowed for OpRead")
+	}
+
+	// check that full rights pass based password gets OpAll
+	req, err = http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&UserPass{Username: "foo", Password: "bar"}).AddAuthHeader(req)
+	if !Allowed(req, OpAll) {
+		t.Fatalf("req with userpass should be allowed for OpAll")
+	}
+
+	// check that full rights token gets OpAll
+	req, err = http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&tokenAuth{token: pkgToken}).AddAuthHeader(req)
+	if !Allowed(req, OpAll) {
+		t.Fatalf("req with token should be allowed for OpAll")
+	}
 }
 
 func TestEmptyPasswords(t *testing.T) {

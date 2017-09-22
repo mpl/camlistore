@@ -67,7 +67,7 @@ func New(authToken string, expr string,
 	}
 	expr = ShiftZoomPredicate(expr)
 	return js.MakeWrapper(&Query{
-		AuthToken: authToken,
+		AuthToken: strings.TrimPrefix(authToken, "ro:"),
 		Expr:      expr,
 		Callback:  callback,
 		Cleanup:   cleanup,

@@ -81,7 +81,7 @@ func New(key string, config map[string]string, cbs *Callbacks) react.Element {
 	props := SelectAllBtnProps{
 		key:       key,
 		callbacks: cbs,
-		authToken: authToken,
+		authToken: strings.TrimPrefix(authToken, "ro:"),
 	}
 	return SelectAllBtn(props)
 }

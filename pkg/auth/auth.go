@@ -50,7 +50,12 @@ const (
 	OpAll    = OpUpload | OpEnumerate | OpStat | OpRemove | OpGet | OpSign | OpDiscovery
 )
 
-const OmitAuthToken = "OmitAuthToken"
+const (
+	OmitAuthToken = "OmitAuthToken"
+	// LogoutHeader is sent by a client, to request a 401 response, in order to
+	// force the browser to invalidate and "forget" about basic auth credentials.
+	LogoutHeader = "X-Authhandler-Logout"
+)
 
 var (
 	// Each mode defines an auth logic which depends on the chosen auth mechanism.
@@ -114,9 +119,11 @@ func newLocalhostAuth(string) (AuthMode, error) {
 func newDevAuth(pw string) (AuthMode, error) {
 	// the vivify mode password is automatically set to "vivi" + Password
 	vp := "vivi" + pw
+	ro := "ro" + pw
 	return &DevAuth{
-		Password:   pw,
-		VivifyPass: &vp,
+		Password:     pw,
+		VivifyPass:   &vp,
+		ReadOnlyPass: &ro,
 	}, nil
 }
 
@@ -136,6 +143,9 @@ func newUserPassAuth(arg string) (AuthMode, error) {
 			// optional vivify mode password: "userpass:joe:ponies:vivify=rainbowdash"
 			vp := strings.Replace(opt, "vivify=", "", -1)
 			mode.VivifyPass = &vp
+		case strings.HasPrefix(opt, "ro="):
+			ro := strings.Replace(opt, "ro=", "", -1)
+			mode.ReadOnlyPass = &ro
 		default:
 			return nil, fmt.Errorf("Unknown userpass option %q", opt)
 		}
@@ -212,11 +222,24 @@ type tokenAuth struct {
 }
 
 func (t *tokenAuth) AllowedAccess(r *http.Request) Operation {
-	if authTokenHeaderMatches(r) {
+	token := authTokenFromHeader(r)
+	wsToken := authTokenFromWS(r)
+	if token == "" && wsToken == "" {
+		return 0
+	}
+	if token != "" {
+		if token == Token() {
+			return OpAll
+		}
+		if token == ROToken() {
+			return OpRead
+		}
+	}
+	if wsToken == Token() {
 		return OpAll
 	}
-	if websocketTokenMatches(r) {
-		return OpAll
+	if wsToken == ROToken() {
+		return OpRead
 	}
 	return 0
 }
@@ -237,6 +260,11 @@ type UserPass struct {
 	// VivifyPass, if not nil, is the alternative password used (only) for the vivify operation.
 	// It is checked when uploading, but Password takes precedence.
 	VivifyPass *string
+
+	// ReadOnlyPass, if not nil, is the alternative password used to restrict access
+	//to OpRead operations only. In effect, it is used to provide a read-only version
+	//of the web UI.
+	ReadOnlyPass *string
 }
 
 func (up *UserPass) AllowedAccess(req *http.Request) Operation {
@@ -249,15 +277,16 @@ func (up *UserPass) AllowedAccess(req *http.Request) Operation {
 			if up.VivifyPass != nil && pass == *up.VivifyPass {
 				return OpVivify
 			}
+			if up.ReadOnlyPass != nil && pass == *up.ReadOnlyPass {
+				return OpRead
+			}
 		}
 	}
 
-	if authTokenHeaderMatches(req) {
-		return OpAll
+	if op := (&tokenAuth{}).AllowedAccess(req); op != 0 {
+		return op
 	}
-	if websocketTokenMatches(req) {
-		return OpAll
-	}
+
 	if up.OrLocalhost && httputil.IsLocalhost(req) {
 		return OpAll
 	}
@@ -295,7 +324,8 @@ func (Localhost) AllowedAccess(req *http.Request) (out Operation) {
 type DevAuth struct {
 	Password string
 	// Password for the vivify mode, automatically set to "vivi" + Password
-	VivifyPass *string
+	VivifyPass   *string
+	ReadOnlyPass *string
 }
 
 func (da *DevAuth) AllowedAccess(req *http.Request) Operation {
@@ -307,13 +337,13 @@ func (da *DevAuth) AllowedAccess(req *http.Request) Operation {
 		if da.VivifyPass != nil && pass == *da.VivifyPass {
 			return OpVivify
 		}
+		if da.ReadOnlyPass != nil && pass == *da.ReadOnlyPass {
+			return OpRead
+		}
 	}
 
-	if authTokenHeaderMatches(req) {
-		return OpAll
-	}
-	if websocketTokenMatches(req) {
-		return OpAll
+	if op := (&tokenAuth{}).AllowedAccess(req); op != 0 {
+		return op
 	}
 
 	// See if the local TCP port is owned by the same non-root user as this
@@ -358,22 +388,23 @@ func Allowed(req *http.Request, op Operation) bool {
 
 var uiTokenPattern = regexp.MustCompile(`^Token ([a-zA-Z0-9]+)`)
 
-func authTokenHeaderMatches(req *http.Request) bool {
+func authTokenFromHeader(req *http.Request) string {
 	authHeader := req.Header.Get("Authorization")
 	if authHeader == "" {
-		return false
+		return ""
 	}
 	matches := uiTokenPattern.FindStringSubmatch(authHeader)
 	if len(matches) != 2 {
-		return false
+		return ""
 	}
-	return matches[1] == Token()
+	return matches[1]
 }
 
-func websocketTokenMatches(req *http.Request) bool {
-	return req.Method == "GET" &&
-		req.Header.Get("Upgrade") == "websocket" &&
-		req.FormValue("authtoken") == Token()
+func authTokenFromWS(req *http.Request) string {
+	if req.Method != "GET" || req.Header.Get("Upgrade") != "websocket" {
+		return ""
+	}
+	return req.FormValue("authtoken")
 }
 
 func TriedAuthorization(req *http.Request) bool {
@@ -410,16 +441,23 @@ func SendUnauthorized(rw http.ResponseWriter, req *http.Request) {
 }
 
 type Handler struct {
+	Op Operation
 	http.Handler
 }
 
 // ServeHTTP serves only if this request and auth mode are allowed all Operations.
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.serveHTTPForOp(w, r, OpAll)
+	h.serveHTTPForOp(w, r, h.Op)
 }
 
 // serveHTTPForOp serves only if op is allowed for this request and auth mode.
+// It replies with http.StatusUnauthorized if the request's LogoutHeader is set.
 func (h Handler) serveHTTPForOp(w http.ResponseWriter, r *http.Request, op Operation) {
+	if r.Header.Get(LogoutHeader) != "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, "<html><body><h1>Unauthorized</h1>")
+		return
+	}
 	if Allowed(r, op) {
 		h.Handler.ServeHTTP(w, r)
 	} else {
@@ -430,11 +468,16 @@ func (h Handler) serveHTTPForOp(w http.ResponseWriter, r *http.Request, op Opera
 // RequireAuth wraps a function with another function that enforces
 // HTTP Basic Auth and checks if the operations in op are all permitted.
 func RequireAuth(h http.Handler, op Operation) http.Handler {
-	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if Allowed(req, op) {
-			h.ServeHTTP(rw, req)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(LogoutHeader) != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintf(w, "<html><body><h1>Unauthorized</h1>")
+			return
+		}
+		if Allowed(r, op) {
+			h.ServeHTTP(w, r)
 		} else {
-			SendUnauthorized(rw, req)
+			SendUnauthorized(w, r)
 		}
 	})
 }
@@ -442,14 +485,26 @@ func RequireAuth(h http.Handler, op Operation) http.Handler {
 var (
 	processRand     string
 	processRandOnce sync.Once
+
+	roProcessRand     string
+	roProcessRandOnce sync.Once
 )
 
 // Token returns a 20 byte token generated (only once, then cached) with RandToken.
 // This token is used for authentication by the Camlistore web UI and its
 // websockets, therefore it should be handled with care.
 func Token() string {
-	processRandOnce.Do(genProcessRand)
+	processRandOnce.Do(func() {
+		processRand = RandToken(20)
+	})
 	return processRand
+}
+
+func ROToken() string {
+	roProcessRandOnce.Do(func() {
+		roProcessRand = RandToken(20)
+	})
+	return roProcessRand
 }
 
 // DiscoveryToken returns OmitAuthToken if the first registered auth mode is of
@@ -464,8 +519,14 @@ func DiscoveryToken() string {
 	return Token()
 }
 
-func genProcessRand() {
-	processRand = RandToken(20)
+func RODiscoveryToken() string {
+	if len(modes) == 0 {
+		return ROToken()
+	}
+	if _, ok := modes[0].(None); ok {
+		return OmitAuthToken
+	}
+	return ROToken()
 }
 
 // RandToken genererates (with crypto/rand.Read) and returns a token

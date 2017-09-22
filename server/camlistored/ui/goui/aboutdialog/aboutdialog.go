@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"camlistore.org/pkg/auth"
 
@@ -54,6 +55,7 @@ func New(entryText, dialog, class string,
 		fmt.Println("No authToken in config for AboutMenuItem")
 		return nil
 	}
+	authToken = strings.TrimPrefix(authToken, "ro:")
 	statusRoot, ok := config["statusRoot"]
 	if !ok {
 		fmt.Println("No statusRoot in config for AboutMenuItem")

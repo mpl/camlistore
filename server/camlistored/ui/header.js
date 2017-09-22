@@ -57,11 +57,13 @@ cam.Header = React.createClass({
 		onNewPermanode: React.PropTypes.func,
 		onImportShare: React.PropTypes.func,
 		onSearch: React.PropTypes.func,
+		onLogout: React.PropTypes.func,
 		favoritesURL: React.PropTypes.instanceOf(goog.Uri).isRequired,
 		statusURL: React.PropTypes.instanceOf(goog.Uri).isRequired,
 		timer: React.PropTypes.shape({setTimeout:React.PropTypes.func.isRequired, clearTimeout:React.PropTypes.func.isRequired}).isRequired,
 		width: React.PropTypes.number.isRequired,
 		config: React.PropTypes.object.isRequired,
+		readOnly: React.PropTypes.bool.isRequired,
 	},
 
 	focusSearch: function() {
@@ -207,7 +209,7 @@ cam.Header = React.createClass({
 				React.DOM.i({className: 'fa fa-exclamation-circle cam-header-menu-item-icon'}),
 				err.error
 			];
-			return this.getMenuItem_(children, err.url, err.onClick, 'cam-header-menu-item-error');
+			return this.getMenuItem_(children, {link: err.url, onClick: err.onClick, class: 'cam-header-menu-item-error', hideOnRO: false});
 		}, this);
 
 		return React.DOM.div(
@@ -220,23 +222,23 @@ cam.Header = React.createClass({
 					transform: 'translate3d(0, ' + this.getMenuTranslate_() + '%, 0)',
 				}),
 			},
-			this.getMenuItem_('Home', this.props.homeURL),
-			this.getMenuItem_('Upload...', null, this.props.onUpload),
+			this.getMenuItem_('Home', {link: this.props.homeURL, hideOnRO: false}),
+			this.getMenuItem_('Upload...', {onClick: this.props.onUpload, hideOnRO: true}),
 
 			// TODO(aa): Create a new permanode UI that delays creating the permanode until the user confirms, then change this to a link to that UI.
 			// TODO(aa): Also I keep going back and forth about whether we should call this 'permanode' or 'set' in the UI. Hrm.
-			this.getMenuItem_('New set', null, this.props.onNewPermanode),
-			this.getMenuItem_('Import share', null, this.props.onImportShare),
-
-			this.getMenuItem_('Importers', this.props.importersURL),
-			this.getMenuItem_('Server status', this.props.statusURL),
-			this.getMenuItem_('Favorites', this.props.favoritesURL),
-			this.getMenuItem_('Help', this.props.helpURL),
+			this.getMenuItem_('New set', {onClick: this.props.onNewPermanode, hideOnRO: true}),
+			this.getMenuItem_('Import share', {onClick: this.props.onImportShare, hideOnRO: true}),
+			this.getMenuItem_('Importers', {link: this.props.importersURL, hideOnRO: true}),
+			this.getMenuItem_('Server status', {link: this.props.statusURL, hideOnRO: false}),
+			this.getMenuItem_('Favorites', {link: this.props.favoritesURL, hideOnRO: false}),
+			this.getMenuItem_('Help', {link: this.props.helpURL, hideOnRO: false}),
 			// We could use getMenuItem_, and only implement
 			// the onClick part with Go, but we're instead also
 			// reimplementing getMenuItem_ to demo that we can
 			// create react elements in Go.
 			this.getAboutDialog_(),
+			this.getMenuItem_('Logout', {onClick: this.props.onLogout, hideOnRO: false}),
 			errorItems
 		);
 	},
@@ -251,7 +253,21 @@ cam.Header = React.createClass({
 			this.props.config);
 	},
 
-	getMenuItem_: function(text, opt_link, opt_onClick, opt_class) {
+	getMenuItem_: function(text, opts) {
+		if (this.props.readOnly && opts && opts.hideOnRO) {
+			return null;
+		}
+		if (opts) {
+			if (opts.onClick) {
+				var opt_onClick = opts.onClick;
+			}
+			if (opts.link) {
+				var opt_link = opts.link;
+			}
+			if (opts.class) {
+				var opt_class = opts.class;
+			}
+		}
 		if (!text || (!opt_onClick && !opt_link)) {
 			return null;
 		}

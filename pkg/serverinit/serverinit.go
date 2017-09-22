@@ -380,8 +380,8 @@ func (hl *handlerLoader) setupHandler(prefix string) {
 		wrappedHandler = unauthorizedHandler{}
 	} else {
 		wrappedHandler = &httputil.PrefixHandler{Prefix: prefix, Handler: hh}
-		if handlerTypeWantsAuth(h.htype) {
-			wrappedHandler = auth.Handler{Handler: wrappedHandler}
+		if wantsAuth, authOp := handlerTypeWantsAuth(h.htype); wantsAuth {
+			wrappedHandler = auth.Handler{Handler: wrappedHandler, Op: authOp}
 		}
 	}
 	hl.installer.Handle(prefix, wrappedHandler)
@@ -393,14 +393,16 @@ func (unauthorizedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 }
 
-func handlerTypeWantsAuth(handlerType string) bool {
+func handlerTypeWantsAuth(handlerType string) (bool, auth.Operation) {
 	// TODO(bradfitz): ask the handler instead? This is a bit of a
 	// weird spot for this policy maybe?
 	switch handlerType {
-	case "ui", "search", "jsonsign", "sync", "status", "help", "importer":
-		return true
+	case "ui", "search", "status", "help":
+		return true, auth.OpRead
+	case "sync", "jsonsign", "importer":
+		return true, auth.OpAll
 	}
-	return false
+	return false, 0
 }
 
 // A Config is the wrapper around a Camlistore JSON configuration file.

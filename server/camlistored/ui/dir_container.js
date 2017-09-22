@@ -32,7 +32,7 @@ goog.require('cam.SpritedImage');
 // FakeSearchSession provides just enough of a common interface with
 // cam.SearchSession to satisfy the needs of the objects within the container
 // (this.props.handlers). It does not actually do any searching; it is populated
-// with the results found with the gopherjs based query (goreact.NewDirChildren).
+// with the results found with the gopherjs based query (goui.NewDirChildren).
 cam.FakeSearchSession = function(data) {
 	this.isComplete_ = false;
 	this.resetData_();
@@ -173,7 +173,7 @@ cam.DirContainer = React.createClass({
 
 	setupSearchSession_: function() {
 		this.searchSession = new cam.FakeSearchSession();
-		this.DirChildrenSession = goreact.NewDirChildren(this.props.config.authToken, this.props.blobRef, this.QUERY_LIMIT_,
+		this.DirChildrenSession = goui.NewDirChildren(this.props.config.authToken, this.props.blobRef, this.QUERY_LIMIT_,
 			// TODO(mpl): there has to be a more efficient way for passing the results to
 			// the search session through this function, than encoding the results to JSON, but
 			// I haven't found it. Waiting for Paul's feedback on it.

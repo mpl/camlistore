@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"camlistore.org/pkg/auth"
 	"camlistore.org/pkg/blobserver"
 	"camlistore.org/pkg/buildinfo"
 	"camlistore.org/pkg/env"
@@ -226,13 +227,13 @@ func (sh *StatusHandler) googleCloudConsole() (string, error) {
 
 var quotedPrefix = regexp.MustCompile(`[;"]/(\S+?/)[&"]`)
 
-func (sh *StatusHandler) serveStatusHTML(rw http.ResponseWriter, req *http.Request) {
+func (sh *StatusHandler) serveStatusHTML(w http.ResponseWriter, r *http.Request) {
 	st := sh.currentStatus()
 	f := func(p string, a ...interface{}) {
 		if len(a) == 0 {
-			io.WriteString(rw, p)
+			io.WriteString(w, p)
 		} else {
-			fmt.Fprintf(rw, p, a...)
+			fmt.Fprintf(w, p, a...)
 		}
 	}
 	f("<html><head><title>camlistored status</title></head>")
@@ -258,20 +259,25 @@ func (sh *StatusHandler) serveStatusHTML(rw http.ResponseWriter, req *http.Reque
 	}
 	f("</ul>")
 
-	f("<h2>Admin</h2>")
-	f("<ul>")
-	f("  <li><form method='post' action='restart' onsubmit='return confirm(\"Really restart now?\")'><button>restart server</button>")
-	f("<input type='checkbox' name='reindex'> reindex <input type='checkbox' name='recovery'> recovery</form></li>")
-	f("</form></li>")
-	if env.OnGCE() {
-		console, err := sh.googleCloudConsole()
-		if err != nil {
-			log.Printf("error getting Google Cloud Console URL: %v", err)
-		} else {
-			f("   <li><b>Updating:</b> When a new image for Camlistore on GCE is available, you can update by hitting \"Reset\" (or \"Stop\", then \"Start\") for your instance on your <a href='%s'>Google Cloud Console</a>.<br>Alternatively, you can ssh to your instance and restart the Camlistore service with: <b>sudo systemctl restart camlistored</b>.</li>", console)
+	// auth check again here, because the status handler is only wrapped in an
+	// OpRead auth handler, and obviously we don't want to give restart rights to
+	// read-only users.
+	if auth.Allowed(r, auth.OpAll) {
+		f("<h2>Admin</h2>")
+		f("<ul>")
+		f("  <li><form method='post' action='restart' onsubmit='return confirm(\"Really restart now?\")'><button>restart server</button>")
+		f("<input type='checkbox' name='reindex'> reindex <input type='checkbox' name='recovery'> recovery</form></li>")
+		f("</form></li>")
+		if env.OnGCE() {
+			console, err := sh.googleCloudConsole()
+			if err != nil {
+				log.Printf("error getting Google Cloud Console URL: %v", err)
+			} else {
+				f("   <li><b>Updating:</b> When a new image for Camlistore on GCE is available, you can update by hitting \"Reset\" (or \"Stop\", then \"Start\") for your instance on your <a href='%s'>Google Cloud Console</a>.<br>Alternatively, you can ssh to your instance and restart the Camlistore service with: <b>sudo systemctl restart camlistored</b>.</li>", console)
+			}
 		}
+		f("</ul>")
 	}
-	f("</ul>")
 
 	f("<h2>Handlers</h2>")
 	f("<p>As JSON: <a href='status.json'>status.json</a>; and the <a href='%s?camli.mode=config'>discovery JSON</a>.</p>", st.rootPrefix)
@@ -291,9 +297,16 @@ func (sh *StatusHandler) serveStatusHTML(rw http.ResponseWriter, req *http.Reque
 	f("<pre>%s</pre>", jsh)
 }
 
-func (sh *StatusHandler) serveRestart(rw http.ResponseWriter, req *http.Request) {
-	if req.Method != "POST" {
-		http.Error(rw, "POST to restart", http.StatusMethodNotAllowed)
+func (sh *StatusHandler) serveRestart(w http.ResponseWriter, r *http.Request) {
+	// auth check again here, because the status handler is only wrapped in an
+	// OpRead auth handler, and obviously we don't want to give restart rights to
+	// read-only users.
+	if !auth.Allowed(r, auth.OpAll) {
+		auth.SendUnauthorized(w, r)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST to restart", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -308,18 +321,18 @@ func (sh *StatusHandler) serveRestart(rw http.ResponseWriter, req *http.Request)
 		if err != nil {
 			msg := fmt.Sprintf("Not restarting: couldn't interrupt app %s: %v", ah.ProgramName(), err)
 			log.Printf(msg)
-			http.Error(rw, msg, http.StatusInternalServerError)
+			http.Error(w, msg, http.StatusInternalServerError)
 			return
 		}
 	}
 
-	reindex := (req.FormValue("reindex") == "on")
-	recovery := (req.FormValue("recovery") == "on")
+	reindex := (r.FormValue("reindex") == "on")
+	recovery := (r.FormValue("recovery") == "on")
 
 	log.Println("Restarting camlistored")
-	rw.Header().Set("Connection", "close")
-	http.Redirect(rw, req, sh.prefix, http.StatusFound)
-	if f, ok := rw.(http.Flusher); ok {
+	w.Header().Set("Connection", "close")
+	http.Redirect(w, r, sh.prefix, http.StatusFound)
+	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
 	osutil.RestartProcess(fmt.Sprintf("-reindex=%t", reindex), fmt.Sprintf("-recovery=%t", recovery))

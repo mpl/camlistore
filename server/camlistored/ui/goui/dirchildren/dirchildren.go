@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"camlistore.org/pkg/auth"
 	"camlistore.org/pkg/blob"
@@ -77,7 +78,7 @@ func New(authToken, parentDir string, limit int,
 	}
 	return js.MakeWrapper(&Query{
 		ParentDir:           parentDirbr,
-		AuthToken:           authToken,
+		AuthToken:           strings.TrimPrefix(authToken, "ro:"),
 		UpdateSearchSession: updadeSearchSession,
 		TriggerRender:       triggerRender,
 		Limit:               limit,

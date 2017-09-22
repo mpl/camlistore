@@ -69,6 +69,9 @@ func New(key string, config map[string]string, cbs *Callbacks) react.Element {
 		fmt.Println("No authToken in config for ShareItemsBtn")
 		return nil
 	}
+	// Nothing is supposed to work wrt sharing in RO mode (and the button is
+	// supposed to be hidden), but still trimming the token out, out of consistency.
+	authToken = strings.TrimPrefix(authToken, "ro:")
 	uiRoot, ok := config["uiRoot"]
 	if !ok {
 		fmt.Println("No uiRoot in config for ShareItemsBtn")

@@ -31,6 +31,7 @@ cam.PermanodeDetail = React.createClass({
 		timer: React.PropTypes.shape({
 			setTimeout: React.PropTypes.func.isRequired,
 		}).isRequired,
+		readOnly: React.PropTypes.bool.isRequired,
 	},
 
 	getInitialState: function() {
@@ -40,6 +41,7 @@ cam.PermanodeDetail = React.createClass({
 			sortBy: 'name',
 			sortAsc: true,
 			status: '',
+			readOnly: false,
 		};
 	},
 
@@ -115,6 +117,18 @@ cam.PermanodeDetail = React.createClass({
 			);
 		};
 
+		var topEmptyRow = null;
+		if (!this.props.readOnly) {
+			topEmptyRow = React.createElement(cam.PermanodeDetail.AttributeRow, {
+					className: 'cam-permanode-detail-new-row',
+					key: 'new',
+					onBlur: this.handleBlur_,
+					onChange: this.handleChange_,
+					row: this.state.newRow,
+					readOnly: this.props.readOnly,
+			});
+		}
+
 		return React.DOM.table(null,
 			React.DOM.tbody(null,
 				React.DOM.tr(
@@ -123,13 +137,7 @@ cam.PermanodeDetail = React.createClass({
 					header(headerText('Value', 'value'), this.handleSort_.bind(null, 'value')),
 					header('')
 				),
-				React.createElement(cam.PermanodeDetail.AttributeRow, {
-					className: 'cam-permanode-detail-new-row',
-					key: 'new',
-					onBlur: this.handleBlur_,
-					onChange: this.handleChange_,
-					row: this.state.newRow,
-				}),
+				topEmptyRow,
 				this.state.rows.map(function(r, i) {
 					return React.createElement(cam.PermanodeDetail.AttributeRow, {
 						key: i,
@@ -137,6 +145,7 @@ cam.PermanodeDetail = React.createClass({
 						onChange: this.handleChange_,
 						onDelete: this.handleDelete_.bind(null, r),
 						row: r,
+						readOnly: this.props.readOnly,
 					});
 				}, this)
 			)
@@ -254,10 +263,14 @@ cam.PermanodeDetail.AttributeRow = React.createClass({
 		onDelete: React.PropTypes.func,
 		onChange: React.PropTypes.func.isRequired,
 		row: React.PropTypes.object,
+		readOnly: React.PropTypes.bool.isRequired,
 	},
 
 	render: function() {
 		var deleteButton = function(onDelete) {
+			if (this.props.readOnly) {
+				return null;
+			}
 			if (onDelete) {
 				return React.DOM.i({
 					className: 'fa fa-times-circle-o cam-permanode-detail-delete-attribute',
@@ -266,7 +279,7 @@ cam.PermanodeDetail.AttributeRow = React.createClass({
 			} else {
 				return null;
 			}
-		};
+		}.bind(this);
 
 		return React.DOM.tr(
 			{
@@ -275,6 +288,7 @@ cam.PermanodeDetail.AttributeRow = React.createClass({
 			},
 			React.DOM.td(null,
 				React.DOM.input({
+					disabled: this.props.readOnly ? true : false,
 					onChange: this.props.onChange.bind(null, this.props.row, 'name'),
 					placeholder: this.props.row.name ? '': 'New attribute name',
 					type: 'text',
@@ -283,6 +297,7 @@ cam.PermanodeDetail.AttributeRow = React.createClass({
 			),
 			React.DOM.td(null,
 				React.DOM.input({
+					disabled: this.props.readOnly ? true : false,
 					onChange: this.props.onChange.bind(null, this.props.row, 'value'),
 					placeholder: this.props.row.value ? '' : 'New attribute value',
 					type: 'text',
@@ -294,7 +309,7 @@ cam.PermanodeDetail.AttributeRow = React.createClass({
 	},
 });
 
-cam.PermanodeDetail.getAspect = function(serverConnection, timer, blobref, targetSearchSession) {
+cam.PermanodeDetail.getAspect = function(serverConnection, timer, readOnly, blobref, targetSearchSession) {
 	if (!targetSearchSession) {
 		return null;
 	}
@@ -312,6 +327,7 @@ cam.PermanodeDetail.getAspect = function(serverConnection, timer, blobref, targe
 				meta: pm,
 				serverConnection: serverConnection,
 				timer: timer,
+				readOnly: readOnly,
 			});
 		},
 	};

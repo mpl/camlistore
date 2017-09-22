@@ -103,6 +103,7 @@ cam.IndexPage = React.createClass({
 		this.searchSessionCache_ = [];
 		this.targetSearchSession_ = null;
 		this.childSearchSession_ = null;
+		this.readOnly_ = gostd.StringsHasPrefix(this.props.config.authToken, "ro:");
 
 		this.eh_ = new goog.events.EventHandler(this);
 
@@ -186,7 +187,7 @@ cam.IndexPage = React.createClass({
 				return true;
 			}
 			// we favor the map aspect if a "map:" query parameter is found.
-			if (v.fragment == 'map' && goreact.HasZoomParameter(this.state.currentURL.getDecodedQuery())) {
+			if (v.fragment == 'map' && goui.HasZoomParameter(this.state.currentURL.getDecodedQuery())) {
 				return true;
 			}
 			return false;
@@ -248,7 +249,7 @@ cam.IndexPage = React.createClass({
 			cam.MapAspect.getAspect.bind(null, this.props.config,
 				this.props.availWidth, this.props.availHeight - this.HEADER_HEIGHT_,
 				this.updateSearchBarOnMap_, this.setPendingQuery_, this.childSearchSession_),
-			cam.PermanodeDetail.getAspect.bind(null, this.props.serverConnection, this.props.timer),
+			cam.PermanodeDetail.getAspect.bind(null, this.props.serverConnection, this.props.timer, this.readOnly_),
 			cam.BlobDetail.getAspect.bind(null, this.getDetailURL_, this.props.serverConnection),
 		].map(getAspect).filter(goog.functions.identity);
 
@@ -751,12 +752,14 @@ cam.IndexPage = React.createClass({
 				onNewPermanode: this.handleCreateSetWithSelection_,
 				onImportShare: this.getImportShareDialog_,
 				onSearch: this.setSearch_,
+				onLogout: this.logout_,
 				favoritesURL: this.getFavoritesURL_(),
 				statusURL: this.baseURL_.resolve(new goog.Uri(this.props.config.statusRoot)),
 				ref: 'header',
 				timer: this.props.timer,
 				width: this.props.availWidth,
 				config: this.props.config,
+				readOnly: this.readOnly_,
 			}
 		)
 	},
@@ -1091,6 +1094,24 @@ cam.IndexPage = React.createClass({
 		this.navigator_.navigate(searchURL);
 	},
 
+	// TODO(mpl): should it be a concern that, if the dev tools console was open
+	// before logging out, and a file, e.g. index.js, was open in it, then it is still
+	// accessible after logging out? if the discovery response was being inspected, then
+	// the authToken is still readable from there.
+	logout_: function() {
+		goui.Logout(this.props.config.uiRoot, function(){
+			document.body.innerHTML = '<html><body><h1>Logged out</h1>';
+		}.bind(this));
+	},
+
+	// hideControlOnRO_ returns controlFunc() only if the web UI is not in readOnly mode.
+	hideControlOnRO_: function(controlFunc) {
+		if (this.readOnly_ ) {
+			return null;
+		}
+		return controlFunc();
+	},
+
 	getSelectAsCurrentSetItem_: function() {
 		if (goog.object.getCount(this.state.selection) != 1) {
 			return null;
@@ -1318,22 +1339,19 @@ cam.IndexPage = React.createClass({
 						goog.string.subs('%s selected item%s', count, count > 1 ? 's' : '')
 					),
 					mainControls: [
-						{
-							"displayTitle": "Update tags",
-							"control": this.getTagsControl_()
-						}
+						this.hideControlOnRO_(this.getTagsMainControl_),
 					].filter(goog.functions.identity),
 					selectionControls: [
 						this.getSelectAllItem_(),
 						this.getClearSelectionItem_(),
-						this.getCreateSetWithSelectionItem_(),
-						this.getSelectAsCurrentSetItem_(),
-						this.getAddToCurrentSetItem_(),
-						this.getRemoveSelectionFromSetItem_(),
-						this.getDeleteSelectionItem_(),
+						this.hideControlOnRO_(this.getCreateSetWithSelectionItem_),
+						this.hideControlOnRO_(this.getSelectAsCurrentSetItem_),
+						this.hideControlOnRO_(this.getAddToCurrentSetItem_),
+						this.hideControlOnRO_(this.getRemoveSelectionFromSetItem_),
+						this.hideControlOnRO_(this.getDeleteSelectionItem_),
 						this.getViewOriginalSelectionItem_(),
 						this.getDownloadSelectionItem_(),
-						this.getShareSelectionItem_(),
+						this.hideControlOnRO_(this.getShareSelectionItem_),
 					].filter(goog.functions.identity),
 					selectedItems: this.state.selection
 				});
@@ -1341,6 +1359,13 @@ cam.IndexPage = React.createClass({
 		}
 
 		return null;
+	},
+
+	getTagsMainControl_: function() {
+		return {
+			"displayTitle": "Update tags",
+			"control": this.getTagsControl_()
+		};
 	},
 
 	getTagsControl_: function() {

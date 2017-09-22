@@ -218,6 +218,13 @@ func (b byFromTo) Less(i, j int) bool {
 }
 
 func (rh *RootHandler) serveDiscovery(rw http.ResponseWriter, req *http.Request) {
+	var authToken string
+	if auth.Allowed(req, auth.OpAll) {
+		authToken = auth.DiscoveryToken()
+	} else if auth.Allowed(req, auth.OpRead) {
+		authToken = "ro:" + auth.RODiscoveryToken()
+	}
+
 	d := &camtypes.Discovery{
 		BlobRoot:     rh.BlobRoot,
 		JSONSignRoot: rh.JSONSignRoot,
@@ -228,7 +235,7 @@ func (rh *RootHandler) serveDiscovery(rw http.ResponseWriter, req *http.Request)
 		StatusRoot:   rh.statusRoot,
 		OwnerName:    rh.OwnerName,
 		UserName:     rh.Username,
-		AuthToken:    auth.DiscoveryToken(),
+		AuthToken:    authToken,
 		ThumbVersion: images.ThumbnailVersion(),
 	}
 	if gener, ok := rh.Storage.(blobserver.Generationer); ok {

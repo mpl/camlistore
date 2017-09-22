@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,6 +143,7 @@ func (fw *forwarder) forward(br blob.Ref) error {
 }
 
 func forward(authToken, shareURL string, updateDialog func(string)) error {
+	authToken = strings.TrimPrefix(authToken, "ro:")
 	am, err := auth.NewTokenAuth(authToken)
 	if err != nil {
 		return fmt.Errorf("error setting up auth for importing share: %v", err)

@@ -19,11 +19,14 @@ limitations under the License.
 package main
 
 import (
+	"strings"
+
 	"camlistore.org/server/camlistored/ui/goui/aboutdialog"
 	"camlistore.org/server/camlistored/ui/goui/dirchildren"
 	"camlistore.org/server/camlistored/ui/goui/downloadbutton"
 	"camlistore.org/server/camlistored/ui/goui/geo"
 	"camlistore.org/server/camlistored/ui/goui/importshare"
+	"camlistore.org/server/camlistored/ui/goui/logout"
 	"camlistore.org/server/camlistored/ui/goui/mapquery"
 	"camlistore.org/server/camlistored/ui/goui/selectallbutton"
 	"camlistore.org/server/camlistored/ui/goui/sharebutton"
@@ -33,12 +36,13 @@ import (
 
 func main() {
 	js.Global.Set("goreact", map[string]interface{}{
-		"AboutMenuItem":          aboutdialog.New,
-		"DownloadItemsBtn":       downloadbutton.New,
-		"ShareItemsBtn":          sharebutton.New,
-		"ImportShare":            importshare.Import,
-		"SelectAllBtn":           selectallbutton.New,
-		"NewDirChildren":         dirchildren.New,
+		"AboutMenuItem":    aboutdialog.New,
+		"DownloadItemsBtn": downloadbutton.New,
+		"ShareItemsBtn":    sharebutton.New,
+		"ImportShare":      importshare.Import,
+		"SelectAllBtn":     selectallbutton.New,
+	})
+	js.Global.Set("goui", map[string]interface{}{
 		"Geocode":                geo.Lookup,
 		"IsLocPredicate":         geo.IsLocPredicate,
 		"HandleLocAreaPredicate": geo.HandleLocAreaPredicate,
@@ -47,8 +51,13 @@ func main() {
 		"LocationCenter":         geo.LocationCenter,
 		"WrapAntimeridian":       geo.WrapAntimeridian,
 		"NewMapQuery":            mapquery.New,
+		"NewDirChildren":         dirchildren.New,
 		"DeleteMapZoom":          mapquery.DeleteZoomPredicate,
 		"ShiftMapZoom":           mapquery.ShiftZoomPredicate,
 		"HasZoomParameter":       mapquery.HasZoomParameter,
+		"Logout":                 logout.Send,
+	})
+	js.Global.Set("gostd", map[string]interface{}{
+		"StringsHasPrefix": strings.HasPrefix,
 	})
 }
