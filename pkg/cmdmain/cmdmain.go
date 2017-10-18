@@ -287,5 +287,5 @@ func Logf(format string, v ...interface{}) {
 	if !*FlagVerbose {
 		return
 	}
-	logger.Printf(format, v)
+	logger.Printf(format, v...)
 }
