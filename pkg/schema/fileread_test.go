@@ -484,7 +484,7 @@ func testReadDir(t *testing.T, members []*test.Blob) {
 		membersRefs = append(membersRefs, v.BlobRef())
 	}
 	ssb := NewStaticSet()
-	subsets := ssb.SetStaticSetMembers(membersRefs, 0)
+	subsets := ssb.SetStaticSetMembers(membersRefs)
 	for _, v := range subsets {
 		fetcher.AddBlob(&test.Blob{v.str})
 	}

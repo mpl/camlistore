@@ -737,7 +737,7 @@ func TestLargeDirs(t *testing.T) {
 
 func testLargeDir(t *testing.T, members []blob.Ref) {
 	ssb := NewStaticSet()
-	subsets := ssb.SetStaticSetMembers(members, 0)
+	subsets := ssb.SetStaticSetMembers(members)
 
 	refToBlob := make(map[string]*Blob, len(subsets))
 	for _, v := range subsets {
