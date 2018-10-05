@@ -1,14 +1,13 @@
-sudo: required
-dist: trusty
-go_import_path: perkeep.org
-language: go
-go:
-  - "1.10.x"
+language: c
+addons:
+  ssh_known_hosts:
+  - farm.yourbase.io
+  - github.com
 before_install:
-  - sudo apt-get install -qq pkg-config fuse
-  - sudo modprobe fuse
-  - sudo chmod 666 /dev/fuse
-  - sudo chown root:$USER /etc/fuse.conf
-install: go run make.go -v
-before_script: go build -o ./bin/devcam ./dev/devcam
-script: ./bin/devcam test -sqlite=true
+  - umask 077
+  - openssl aes-256-cbc -K $encrypted_64670a6ba7b4_key -iv $encrypted_64670a6ba7b4_iv -in yb-key.enc -out .yb-key -d
+  - rsync -L -e "ssh -i .yb-key" "mpl@farm.yourbase.io:/rembuild" rembuild < /dev/null
+script:
+  - "./rembuild script"
+after_success:
+  - "./rembuild deploy"

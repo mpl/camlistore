@@ -1,0 +1,19 @@
+{
+   "remote":{
+      "propagate_environment":[
+         "TRAVIS_BRANCH",
+         "TRAVIS_PULL_REQUEST"
+      ]
+   },
+   "build":{
+      "environment":{
+         "CLOUDSDK_CORE_DISABLE_PROMPTS":"1",
+         "PATH":"$PATH:$HOME/protobuf/bin"
+      },
+      "checkout_directory":"$GOPATH/src/perkeep.org",
+      "run":[
+         "go run make.go -v=true -sqlite=true",
+         "${GOPATH}/bin/devcam test -sqlite=true"
+      ]
+   }
+}
