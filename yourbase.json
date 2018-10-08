@@ -12,8 +12,10 @@
       },
       "checkout_directory":"$GOPATH/src/perkeep.org",
       "run":[
-         "go run make.go -v=true",
-         "${GOPATH}/bin/devcam test"
+         "apt-get update",
+         "apt-get install -y build-essential sqlite3 libsqlite3-0 libsqlite3-dev",
+         "go run make.go -v=true -sqlite=true",
+         "${GOPATH}/bin/devcam test -sqlite=true"
       ]
    }
 }
