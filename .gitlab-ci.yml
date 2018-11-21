@@ -1,0 +1,21 @@
+variables:
+  CI_PROJECT_DIR: /go/src/perkeep.org
+
+test:
+  image: golang:1.11
+  before_script:
+    - apt-get update
+    - apt-get install -y sudo build-essential sqlite3 libsqlite3-0 libsqlite3-dev fuse
+    - groupadd fuse
+    - chown root:fuse /etc/fuse.conf
+    - useradd -m -s /bin/bash keepy
+    - chown -R keepy:keepy /home/keepy
+    - usermod -aG fuse keepy
+    - sudo -u keepy -- mkdir -p /home/keepy/bin
+    - mkdir -p /go/src
+    - mv /builds/project-0 /go/src/perkeep.org
+    - cd /go/src/perkeep.org
+    - ls -la /go/src/perkeep.org/.git/hooks
+  script:
+    - go run make.go -v=true -sqlite=true
+    - /go/bin/devcam test -sqlite=true
